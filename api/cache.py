@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 try:
     import redis
     # Safely import Redis libraries
+# Around line 26 in api/cache.py
 try:
     import aioredis
     REDIS_AVAILABLE = True
@@ -30,8 +31,16 @@ except (ImportError, TypeError):
     aioredis = None
     REDIS_AVAILABLE = False
     print("Redis dependencies not installed. Using in-memory cache as fallback.")
-    REDIS_AVAILABLE = True
 
+# Later in the file where redis_client is initialized
+redis_client = None
+if REDIS_AVAILABLE:
+    try:
+        # Redis initialization code here
+        redis_client = aioredis.Redis(...)
+    except Exception as e:
+        logger.error(f"Failed to initialize Redis: {str(e)}")
+        redis_client = None
 
 # Cache configuration
 CACHE_TTL = int(os.getenv('CACHE_TTL', 3600))  # 1 hour default
