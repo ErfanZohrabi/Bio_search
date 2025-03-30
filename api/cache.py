@@ -22,11 +22,16 @@ logger = logging.getLogger(__name__)
 # Try to import Redis dependencies
 try:
     import redis
+    # Safely import Redis libraries
+try:
     import aioredis
     REDIS_AVAILABLE = True
-except ImportError:
-    logger.warning("Redis dependencies not installed. Using in-memory cache as fallback.")
+except (ImportError, TypeError):
+    aioredis = None
     REDIS_AVAILABLE = False
+    print("Redis dependencies not installed. Using in-memory cache as fallback.")
+    REDIS_AVAILABLE = True
+
 
 # Cache configuration
 CACHE_TTL = int(os.getenv('CACHE_TTL', 3600))  # 1 hour default
