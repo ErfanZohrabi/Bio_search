@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BioSearch API Documentation</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        pre.code {
+            background-color: #f8f9fa;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            border-left: 4px solid var(--primary-color);
+            overflow-x: auto;
+        }
+        
+        .param-table th {
+            background-color: #f8f9fa;
+        }
+        
+        .section-card {
+            margin-bottom: 2rem;
+            transition: all 0.3s ease;
+        }
+        
+        .section-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+        
+        .copy-btn {
+            position: absolute;
+            top: 0.5rem;
+            right: 0.5rem;
+            background-color: rgba(255, 255, 255, 0.8);
+            border: none;
+            border-radius: 0.25rem;
+            padding: 0.25rem 0.5rem;
+            font-size: 0.8rem;
+            transition: all 0.2s ease;
+        }
+        
+        .copy-btn:hover {
+            background-color: var(--primary-color);
+            color: white;
+        }
+        
+        .language-tag {
+            position: absolute;
+            top: 0.5rem;
+            left: 0.5rem;
+            background-color: rgba(0, 0, 0, 0.6);
+            color: white;
+            border-radius: 0.25rem;
+            padding: 0.15rem 0.4rem;
+            font-size: 0.7rem;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <header class="bg-primary text-white p-4 py-4">
+        <div class="container">
+            <div class="row align-items-center">
+                <div class="col-md-8">
+                    <h1><i class="fas fa-dna me-2"></i>BioSearch</h1>
+                    <p class="lead mb-0">API Documentation</p>
+                </div>
+                <div class="col-md-4 text-md-end">
+                    <a href="/" class="text-white me-3"><i class="fas fa-home me-1"></i>Home</a>
+                    <a href="/about" class="text-white me-3"><i class="fas fa-info-circle me-1"></i>About</a>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="container py-5">
+        <section class="mb-5">
+            <h2 class="mb-4"><i class="fas fa-book me-2 text-primary"></i>API Documentation</h2>
+            <p class="lead">BioSearch provides a RESTful API to search across multiple biological databases programmatically. This page describes the available endpoints, parameters, and response formats.</p>
+            
+            <!-- Base URL Section -->
+            <div class="card section-card shadow">
+                <div class="card-body">
+                    <h3 class="h5 card-title mb-3"><i class="fas fa-link me-2 text-primary"></i>Base URL</h3>
+                    <p>All API requests should be made to the following base URL:</p>
+                    <pre class="code">http://localhost:5000/api</pre>
+                    <p class="text-muted mt-3">Note: The base URL will differ in production environments.</p>
+                </div>
+            </div>
+            
+            <!-- Search Endpoint Section -->
+            <div class="card section-card shadow mt-4">
+                <div class="card-body">
+                    <h3 class="h5 card-title mb-3"><i class="fas fa-search me-2 text-primary"></i>Search Endpoint</h3>
+                    <p>Use this endpoint to search across biological databases.</p>
+                    
+                    <h4 class="h6 mt-4 mb-2">Request</h4>
+                    <div class="row">
+                        <div class="col-md-3">
+                            <span class="badge bg-primary">GET</span> <span class="badge bg-secondary">POST</span>
+                        </div>
+                        <div class="col-md-9">
+                            <code>/search</code>
+                        </div>
+                    </div>
+                    
+                    <h4 class="h6 mt-4 mb-2">Parameters</h4>
+                    <div class="table-responsive">
+                        <table class="table table-bordered param-table">
+                            <thead>
+                                <tr>
+                                    <th>Parameter</th>
+                                    <th>Type</th>
+                                    <th>Required</th>
+                                    <th>Description</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><code>query</code></td>
+                                    <td>String</td>
+                                    <td>Yes</td>
+                                    <td>The search query (e.g., gene name, protein ID)</td>
+                                </tr>
+                                <tr>
+                                    <td><code>databases</code></td>
+                                    <td>String</td>
+                                    <td>No</td>
+                                    <td>Comma-separated list of databases to search (default: all)<br>
+                                    Options: ncbi, pubmed, uniprot, drugbank, kegg, pdb, ensembl</td>
+                                </tr>
+                                <tr>
+                                    <td><code>organism</code></td>
+                                    <td>String</td>
+                                    <td>No</td>
+                                    <td>Organism filter (default: human)<br>
+                                    Common options: human, mouse, rat, zebrafish</td>
+                                </tr>
+                                <tr>
+                                    <td><code>limit</code></td>
+                                    <td>Integer</td>
+                                    <td>No</td>
+                                    <td>Maximum number of results per database (default: 10)</td>
+                                </tr>
+                                <tr>
+                                    <td><code>date_from</code></td>
+                                    <td>String</td>
+                                    <td>No</td>
+                                    <td>Filter results from this date (YYYY-MM-DD)</td>
+                                </tr>
+                                <tr>
+                                    <td><code>date_to</code></td>
+                                    <td>String</td>
+                                    <td>No</td>
+                                    <td>Filter results until this date (YYYY-MM-DD)</td>
+                                </tr>
+                                <tr>
+                                    <td><code>result_type</code></td>
+                                    <td>String</td>
+                                    <td>No</td>
+                                    <td>Filter by result type (e.g., gene, protein, pathway)</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <h4 class="h6 mt-4 mb-2">Response</h4>
+                    <p>The response is a JSON object containing the search results grouped by result type.</p>
+                    <div class="position-relative">
+                        <span class="language-tag">json</span>
+                        <button class="copy-btn">
+                            <i class="fas fa-copy"></i> Copy
+                        </button>
+                        <pre class="code">{
+  "query": "TP53",
+  "timestamp": "2023-08-31T12:34:56",
+  "result_counts": {
+    "genes": 2,
+    "proteins": 1,
+    "pathways": 3,
+    "drugs": 0,
+    "publications": 5,
+    "structures": 2
+  },
+  "results": {
+    "genes": [
+      {
+        "id": "7157",
+        "name": "tumor protein p53",
+        "source_db": "NCBI",
+        "url": "https://www.ncbi.nlm.nih.gov/gene/7157",
+        "organism": "human",
+        "symbol": "TP53",
+        "description": "This gene encodes a tumor suppressor protein..."
+      },
+      // More gene results...
+    ],
+    "proteins": [
+      // Protein results...
+    ],
+    "pathways": [
+      // Pathway results...
+    ],
+    "publications": [
+      // Publication results...
+    ],
+    "structures": [
+      // Structure results...
+    ]
+  }
+}</pre>
+                    </div>
+                    
+                    <h4 class="h6 mt-4 mb-2">Error Response</h4>
+                    <div class="position-relative">
+                        <span class="language-tag">json</span>
+                        <pre class="code">{
+  "error": "Error message details"
+}</pre>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Example Usage Section -->
+            <div class="card section-card shadow mt-4">
+                <div class="card-body">
+                    <h3 class="h5 card-title mb-3"><i class="fas fa-code me-2 text-primary"></i>Example Usage</h3>
+                    
+                    <h4 class="h6 mt-3 mb-2">Python</h4>
+                    <div class="position-relative">
+                        <span class="language-tag">python</span>
+                        <button class="copy-btn">
+                            <i class="fas fa-copy"></i> Copy
+                        </button>
+                        <pre class="code">import requests
+import json
+
+# Search for TP53 in NCBI and Ensembl
+response = requests.get(
+    'http://localhost:5000/api/search',
+    params={
+        'query': 'TP53',
+        'databases': 'ncbi,ensembl',
+        'organism': 'human',
+        'limit': 5
+    }
+)
+
+if response.status_code == 200:
+    results = response.json()
+    print(json.dumps(results, indent=2))
+else:
+    print(f"Error: {response.status_code}")
+    print(response.text)</pre>
+                    </div>
+                    
+                    <h4 class="h6 mt-4 mb-2">JavaScript</h4>
+                    <div class="position-relative">
+                        <span class="language-tag">javascript</span>
+                        <button class="copy-btn">
+                            <i class="fas fa-copy"></i> Copy
+                        </button>
+                        <pre class="code">fetch('http://localhost:5000/api/search?query=insulin&databases=uniprot,drugbank&limit=5')
+  .then(response => {
+    if (!response.ok) {
+      throw new Error(`HTTP error: ${response.status}`);
+    }
+    return response.json();
+  })
+  .then(data => {
+    console.log(data);
+  })
+  .catch(error => {
+    console.error('Error:', error);
+  });</pre>
+                    </div>
+                    
+                    <h4 class="h6 mt-4 mb-2">cURL</h4>
+                    <div class="position-relative">
+                        <span class="language-tag">bash</span>
+                        <button class="copy-btn">
+                            <i class="fas fa-copy"></i> Copy
+                        </button>
+                        <pre class="code">curl -X GET "http://localhost:5000/api/search?query=BRCA1&databases=ncbi,pubmed&organism=human&limit=10"</pre>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Rate Limiting Section -->
+            <div class="card section-card shadow mt-4">
+                <div class="card-body">
+                    <h3 class="h5 card-title mb-3"><i class="fas fa-tachometer-alt me-2 text-primary"></i>Rate Limiting</h3>
+                    <p>BioSearch imposes rate limits to prevent abuse and ensure fair usage. The limits are as follows:</p>
+                    <ul>
+                        <li>Maximum of 60 requests per minute per IP address</li>
+                        <li>Each underlying database may have its own rate limits</li>
+                    </ul>
+                    <p class="text-muted mt-3">Note: BioSearch manages rate limits for external databases. In some cases, using your own API keys may increase these limits.</p>
+                </div>
+            </div>
+            
+            <!-- Data Models Section -->
+            <div class="card section-card shadow mt-4">
+                <div class="card-body">
+                    <h3 class="h5 card-title mb-3"><i class="fas fa-table me-2 text-primary"></i>Data Models</h3>
+                    <p>BioSearch returns standardized data models for different biological entities:</p>
+                    
+                    <div class="row mt-4">
+                        <div class="col-md-6 mb-3">
+                            <div class="card h-100">
+                                <div class="card-body">
+                                    <h4 class="h6 card-title">Gene</h4>
+                                    <ul class="small">
+                                        <li><strong>id</strong>: Gene identifier</li>
+                                        <li><strong>name</strong>: Gene name</li>
+                                        <li><strong>symbol</strong>: Gene symbol</li>
+                                        <li><strong>organism</strong>: Organism</li>
+                                        <li><strong>description</strong>: Gene description</li>
+                                        <li><strong>location</strong>: Genomic location</li>
+                                        <li><strong>source_db</strong>: Source database</li>
+                                        <li><strong>url</strong>: Link to original entry</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-6 mb-3">
+                            <div class="card h-100">
+                                <div class="card-body">
+                                    <h4 class="h6 card-title">Protein</h4>
+                                    <ul class="small">
+                                        <li><strong>id</strong>: Protein identifier</li>
+                                        <li><strong>name</strong>: Protein name</li>
+                                        <li><strong>organism</strong>: Organism</li>
+                                        <li><strong>gene</strong>: Associated gene</li>
+                                        <li><strong>function</strong>: Protein function</li>
+                                        <li><strong>sequence</strong>: Amino acid sequence</li>
+                                        <li><strong>source_db</strong>: Source database</li>
+                                        <li><strong>url</strong>: Link to original entry</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-6 mb-3">
+                            <div class="card h-100">
+                                <div class="card-body">
+                                    <h4 class="h6 card-title">Pathway</h4>
+                                    <ul class="small">
+                                        <li><strong>id</strong>: Pathway identifier</li>
+                                        <li><strong>name</strong>: Pathway name</li>
+                                        <li><strong>organism</strong>: Organism</li>
+                                        <li><strong>description</strong>: Pathway description</li>
+                                        <li><strong>genes</strong>: List of genes in pathway</li>
+                                        <li><strong>proteins</strong>: List of proteins in pathway</li>
+                                        <li><strong>source_db</strong>: Source database</li>
+                                        <li><strong>url</strong>: Link to original entry</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-6 mb-3">
+                            <div class="card h-100">
+                                <div class="card-body">
+                                    <h4 class="h6 card-title">Publication</h4>
+                                    <ul class="small">
+                                        <li><strong>id</strong>: Publication identifier (e.g., PMID)</li>
+                                        <li><strong>title</strong>: Publication title</li>
+                                        <li><strong>authors</strong>: List of authors</li>
+                                        <li><strong>journal</strong>: Journal name</li>
+                                        <li><strong>year</strong>: Publication year</li>
+                                        <li><strong>abstract</strong>: Abstract text</li>
+                                        <li><strong>source_db</strong>: Source database</li>
+                                        <li><strong>url</strong>: Link to original entry</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="bg-light py-4 border-top">
+        <div class="container">
+            <div class="row">
+                <div class="col-md-6">
+                    <p class="mb-0">&copy; 2023 BioSearch. All rights reserved.</p>
+                </div>
+                <div class="col-md-6 text-md-end">
+                    <a href="#" class="text-muted me-3"><i class="fas fa-shield-alt me-1"></i>Privacy Policy</a>
+                    <a href="#" class="text-muted"><i class="fas fa-file-contract me-1"></i>Terms of Use</a>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Copy button functionality
+        document.querySelectorAll('.copy-btn').forEach(button => {
+            button.addEventListener('click', () => {
+                const preElement = button.nextElementSibling;
+                const textToCopy = preElement.textContent;
+                
+                navigator.clipboard.writeText(textToCopy).then(() => {
+                    // Visual feedback
+                    const originalText = button.innerHTML;
+                    button.innerHTML = '<i class="fas fa-check"></i> Copied!';
+                    button.classList.add('bg-success', 'text-white');
+                    
+                    setTimeout(() => {
+                        button.innerHTML = originalText;
+                        button.classList.remove('bg-success', 'text-white');
+                    }, 2000);
+                }).catch(err => {
+                    console.error('Could not copy text: ', err);
+                });
+            });
+        });
+    </script>
+</body>
+</html> 
