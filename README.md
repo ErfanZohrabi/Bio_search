@@ -3,7 +3,7 @@
 BioSearch is a comprehensive biological database search system that integrates multiple biological databases containing pathway and protein information in humans and related organisms.
 
 ## Live Application
-Access the live BioSearch application: [BioSearch App](https://biosearch.onrender.com) [BioSearch doc]((https://erfanzohrabi.github.io/Bio_search/)) 
+Access the live BioSearch application: [BioSearch App](https://biosearch.onrender.com) [BioSearch doc](https://erfanzohrabi.github.io/Bio_search/) 
 
 
 ## Features
