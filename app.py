@@ -445,7 +445,7 @@ def init_cache_command():
 # Replace before_first_request (removed in Flask 2.x) with a new approach
 # Using 'with app.app_context()' pattern for initialization
 def initialize_app():
-    """Initialize application components."""
+    """ Initialize application components."""
     # Initialize cache asynchronously
     try:
         asyncio.run(cache.initialize_async())
@@ -454,7 +454,7 @@ def initialize_app():
         app.logger.error(f"Cache initialization failed: {str(e)}")
 
 # Register the function to run when the application starts
-   if __name__ == "__main__":
-       import os
-       port = int(os.environ.get("PORT", 5000))
-       app.run(host="0.0.0.0", port=port)
+if __name__ == "__main__":
+    import os
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
