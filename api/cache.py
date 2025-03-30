@@ -24,13 +24,14 @@ try:
     import redis
     # Safely import Redis libraries
 # Around line 26 in api/cache.py
+# Fix for the incomplete try block
 try:
     import aioredis
     REDIS_AVAILABLE = True
 except (ImportError, TypeError):
     aioredis = None
     REDIS_AVAILABLE = False
-    print("Redis dependencies not installed. Using in-memory cache as fallback.")
+    logger.warning("Redis dependencies not installed. Using in-memory cache as fallback.")
 
 # Later in the file where redis_client is initialized
 redis_client = None
