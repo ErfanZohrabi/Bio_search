@@ -454,12 +454,7 @@ def initialize_app():
         app.logger.error(f"Cache initialization failed: {str(e)}")
 
 # Register the function to run when the application starts
-if __name__ == '__main__':
-    # Initialize app components
-    initialize_app()
-    
-    # Set up additional environment variables if needed
-    port = int(os.environ.get('PORT', 5000))
-    debug = os.environ.get('FLASK_DEBUG', 'true').lower() in ('true', '1', 't')
-    
-    app.run(host='0.0.0.0', port=port, debug=debug) 
+   if __name__ == "__main__":
+       import os
+       port = int(os.environ.get("PORT", 5000))
+       app.run(host="0.0.0.0", port=port)
