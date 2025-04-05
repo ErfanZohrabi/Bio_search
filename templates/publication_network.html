@@ -1,0 +1,680 @@
+{% extends "base.html" %}
+
+{% block title %}Publication Network - BioSearch{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row">
+        <div class="col-12">
+            <h2>Publication Co-citation Network</h2>
+            <div class="card mb-4">
+                <div class="card-body">
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label for="searchQuery" class="form-label">PubMed Search</label>
+                            <div class="input-group mb-3">
+                                <input type="text" class="form-control" id="searchQuery" placeholder="Enter search term or PMID..." value="{{ query }}">
+                                <button class="btn btn-primary" type="button" id="searchButton">Search</button>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <label for="pmidInput" class="form-label">PMID</label>
+                            <input type="text" class="form-control" id="pmidInput" placeholder="Enter PMID..." value="{{ pmid }}">
+                        </div>
+                        <div class="col-md-3">
+                            <label for="limitInput" class="form-label">Node Limit</label>
+                            <input type="number" class="form-control" id="limitInput" min="5" max="100" value="30">
+                        </div>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col-12">
+                            <button id="generateNetworkBtn" class="btn btn-primary">Generate Network</button>
+                            <button id="resetNetworkBtn" class="btn btn-outline-secondary ms-2">Reset</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row mb-3 network-info-container" style="display: none;">
+                <div class="col-12">
+                    <div class="alert alert-info">
+                        <h5 id="networkInfoTitle">Network Information</h5>
+                        <div id="networkInfo"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-body">
+                            <div id="loadingIndicator" class="text-center p-5" style="display: none;">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </div>
+                                <p class="mt-3">Fetching publication data from PubMed...</p>
+                                <p class="small text-muted">This may take a minute as we analyze citation networks</p>
+                            </div>
+                            <div id="networkErrorContainer" class="alert alert-danger" style="display: none;"></div>
+                            <div id="emptyNetworkMessage" class="alert alert-warning" style="display: none;">
+                                Enter a PubMed search term or PMID to generate a co-citation network.
+                            </div>
+                            <div id="controlsContainer" class="mb-3" style="display: none;">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <div class="btn-group" role="group">
+                                        <button id="zoomInBtn" class="btn btn-sm btn-outline-secondary"><i class="fas fa-search-plus"></i></button>
+                                        <button id="zoomOutBtn" class="btn btn-sm btn-outline-secondary"><i class="fas fa-search-minus"></i></button>
+                                        <button id="fitBtn" class="btn btn-sm btn-outline-secondary"><i class="fas fa-expand"></i> Fit</button>
+                                    </div>
+                                    <div>
+                                        <div class="form-check form-switch d-inline-block me-3">
+                                            <input class="form-check-input" type="checkbox" id="toggleCocitationLinks" checked>
+                                            <label class="form-check-label" for="toggleCocitationLinks">Co-citation Links</label>
+                                        </div>
+                                        <button id="downloadPngBtn" class="btn btn-sm btn-outline-primary">
+                                            <i class="fas fa-download"></i> Export
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="networkContainer" style="height: 600px; border: 1px solid #ddd; border-radius: 4px; display: none; background: linear-gradient(to bottom right, #f8f9fa, #e9ecef);"></div>
+                            <div class="mt-3 network-legend" style="display: none;">
+                                <h6>Legend:</h6>
+                                <div class="d-flex flex-wrap">
+                                    <div class="me-4 mb-2">
+                                        <span class="badge bg-primary rounded-pill">&nbsp;&nbsp;&nbsp;</span> Source Paper
+                                    </div>
+                                    <div class="me-4 mb-2">
+                                        <span class="badge bg-success rounded-pill">&nbsp;&nbsp;&nbsp;</span> Citing Papers
+                                    </div>
+                                    <div class="me-4 mb-2">
+                                        <span class="badge bg-info text-dark rounded-pill">&nbsp;&nbsp;&nbsp;</span> Cited Papers
+                                    </div>
+                                    <div class="me-4 mb-2">
+                                        <span class="badge bg-secondary rounded-pill">&nbsp;&nbsp;&nbsp;</span> Secondary Connections
+                                    </div>
+                                </div>
+                                <div class="d-flex flex-wrap mt-2">
+                                    <div class="me-4 mb-2">
+                                        <span style="display: inline-block; width: 20px; height: 2px; background-color: #999;"></span> Citation Link
+                                    </div>
+                                    <div class="me-4 mb-2">
+                                        <span style="display: inline-block; width: 20px; height: 2px; background-color: #6c757d; border-top: 1px dashed #6c757d;"></span> Co-citation Link
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Paper Details Side Panel -->
+    <div id="detailsPanel" class="position-fixed end-0 top-0 h-100 bg-white shadow p-3" style="width: 400px; z-index: 1050; transform: translateX(100%); transition: transform 0.3s ease-out; overflow-y: auto;">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5 id="detailsTitle">Publication Details</h5>
+            <button id="closeDetailsBtn" class="btn-close" aria-label="Close"></button>
+        </div>
+        <div id="detailsContent"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<!-- Include Cytoscape.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.23.0/cytoscape.min.js"></script>
+<!-- Include fcose layout for better network visualization -->
+<script src="https://unpkg.com/layout-base/layout-base.js"></script>
+<script src="https://unpkg.com/cose-base/cose-base.js"></script>
+<script src="https://unpkg.com/cytoscape-fcose/cytoscape-fcose.js"></script>
+<!-- Include FileSaver.js for downloading images -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // DOM Elements
+    const searchQuery = document.getElementById('searchQuery');
+    const searchButton = document.getElementById('searchButton');
+    const pmidInput = document.getElementById('pmidInput');
+    const limitInput = document.getElementById('limitInput');
+    const generateNetworkBtn = document.getElementById('generateNetworkBtn');
+    const resetNetworkBtn = document.getElementById('resetNetworkBtn');
+    const networkContainer = document.getElementById('networkContainer');
+    const loadingIndicator = document.getElementById('loadingIndicator');
+    const networkErrorContainer = document.getElementById('networkErrorContainer');
+    const emptyNetworkMessage = document.getElementById('emptyNetworkMessage');
+    const networkInfo = document.getElementById('networkInfo');
+    const networkInfoTitle = document.getElementById('networkInfoTitle');
+    const controlsContainer = document.getElementById('controlsContainer');
+    const zoomInBtn = document.getElementById('zoomInBtn');
+    const zoomOutBtn = document.getElementById('zoomOutBtn');
+    const fitBtn = document.getElementById('fitBtn');
+    const toggleCocitationLinks = document.getElementById('toggleCocitationLinks');
+    const downloadPngBtn = document.getElementById('downloadPngBtn');
+    const detailsPanel = document.getElementById('detailsPanel');
+    const closeDetailsBtn = document.getElementById('closeDetailsBtn');
+    const detailsContent = document.getElementById('detailsContent');
+    
+    // Cytoscape instance
+    let cy = null;
+    let selectedNode = null;
+    
+    // Initialize UI state
+    if (!searchQuery.value && !pmidInput.value) {
+        emptyNetworkMessage.style.display = 'block';
+    } else {
+        generateNetwork();
+    }
+    
+    // Event Listeners
+    searchButton.addEventListener('click', function() {
+        if (searchQuery.value) {
+            pmidInput.value = ''; // Clear PMID if searching by query
+            generateNetwork();
+        }
+    });
+    
+    searchQuery.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter' && searchQuery.value) {
+            pmidInput.value = ''; // Clear PMID if searching by query
+            generateNetwork();
+        }
+    });
+    
+    pmidInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter' && pmidInput.value) {
+            searchQuery.value = ''; // Clear search query if using PMID
+            generateNetwork();
+        }
+    });
+    
+    generateNetworkBtn.addEventListener('click', generateNetwork);
+    
+    resetNetworkBtn.addEventListener('click', function() {
+        searchQuery.value = '';
+        pmidInput.value = '';
+        limitInput.value = '30';
+        resetNetworkView();
+        emptyNetworkMessage.style.display = 'block';
+        hideDetailsPanel();
+    });
+    
+    zoomInBtn.addEventListener('click', function() {
+        if (cy) cy.zoom(cy.zoom() * 1.2);
+    });
+    
+    zoomOutBtn.addEventListener('click', function() {
+        if (cy) cy.zoom(cy.zoom() / 1.2);
+    });
+    
+    fitBtn.addEventListener('click', function() {
+        if (cy) cy.fit();
+    });
+    
+    toggleCocitationLinks.addEventListener('change', function() {
+        if (!cy) return;
+        
+        if (this.checked) {
+            cy.elements('edge[type = "cocitation"]').style('opacity', 0.7);
+        } else {
+            cy.elements('edge[type = "cocitation"]').style('opacity', 0);
+        }
+    });
+    
+    downloadPngBtn.addEventListener('click', function() {
+        if (cy) {
+            const png = cy.png({
+                output: 'blob',
+                bg: 'white',
+                full: true,
+                scale: 2.0
+            });
+            saveAs(png, `pubmed-network-${pmidInput.value || 'search'}-${new Date().toISOString().slice(0, 10)}.png`);
+        }
+    });
+    
+    closeDetailsBtn.addEventListener('click', function() {
+        hideDetailsPanel();
+        if (selectedNode && cy) {
+            selectedNode.removeClass('selected');
+            selectedNode = null;
+        }
+    });
+    
+    // Main function to generate the network
+    function generateNetwork() {
+        // Get input values
+        const query = searchQuery.value.trim();
+        const pmid = pmidInput.value.trim();
+        const limit = parseInt(limitInput.value) || 30;
+        
+        // Validate input
+        if (!query && !pmid) {
+            showError('Please enter a search query or PMID.');
+            return;
+        }
+        
+        // Reset current view and show loading
+        resetNetworkView();
+        loadingIndicator.style.display = 'block';
+        
+        // Build API URL
+        let apiUrl = '/api/network/publication?limit=' + limit;
+        if (pmid) {
+            apiUrl += '&pmid=' + encodeURIComponent(pmid);
+        } else if (query) {
+            apiUrl += '&query=' + encodeURIComponent(query);
+        }
+        
+        // Fetch network data
+        fetch(apiUrl)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Network request failed with status ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                // Hide loading
+                loadingIndicator.style.display = 'none';
+                
+                // Check if we have valid data
+                if (!data || !data.nodes || data.nodes.length === 0) {
+                    showError('No publication data found for the given input.');
+                    return;
+                }
+                
+                // Show the network container and controls
+                networkContainer.style.display = 'block';
+                controlsContainer.style.display = 'block';
+                document.querySelector('.network-legend').style.display = 'block';
+                
+                // Display network info
+                displayNetworkInfo(data);
+                
+                // Initialize Cytoscape network
+                initializeNetwork(data);
+            })
+            .catch(error => {
+                console.error('Error fetching network data:', error);
+                loadingIndicator.style.display = 'none';
+                showError('Error loading network data: ' + error.message);
+            });
+    }
+    
+    function displayNetworkInfo(data) {
+        const metadata = data.metadata;
+        const sourcePmid = data.source_pmid;
+        
+        // Set the PMID input value to ensure it's displayed
+        pmidInput.value = sourcePmid;
+        
+        // Format the network information
+        let infoHtml = `
+            <p><strong>Source Paper:</strong> ${metadata.source_title}</p>
+            <p><strong>Network Statistics:</strong></p>
+            <ul>
+                <li>Total Nodes: ${metadata.total_nodes}</li>
+                <li>Total Edges: ${metadata.total_edges}</li>
+                <li>Papers Citing Source: ${metadata.citing_count}</li>
+                <li>Papers Cited by Source: ${metadata.cited_count}</li>
+                <li>Secondary Connections: ${metadata.secondary_count}</li>
+            </ul>
+        `;
+        
+        networkInfo.innerHTML = infoHtml;
+        document.querySelector('.network-info-container').style.display = 'block';
+    }
+    
+    function initializeNetwork(data) {
+        const nodes = data.nodes;
+        const edges = data.edges;
+        
+        // Transform data for Cytoscape
+        const cyElements = {
+            nodes: nodes.map(node => ({
+                data: {
+                    id: node.id,
+                    label: node.label,
+                    authors: node.authors,
+                    year: node.year,
+                    journal: node.journal,
+                    type: node.type
+                }
+            })),
+            edges: edges.map((edge, index) => ({
+                data: {
+                    id: `e${index}`,
+                    source: edge.source,
+                    target: edge.target,
+                    type: edge.type,
+                    weight: edge.weight || 1
+                }
+            }))
+        };
+        
+        // Initialize Cytoscape
+        cy = cytoscape({
+            container: networkContainer,
+            elements: cyElements,
+            style: [
+                {
+                    selector: 'node',
+                    style: {
+                        'label': 'data(label)',
+                        'text-valign': 'center',
+                        'text-halign': 'center',
+                        'text-wrap': 'wrap',
+                        'text-max-width': '180px',
+                        'font-size': '10px',
+                        'background-color': '#ccc',
+                        'border-width': 2,
+                        'border-color': '#666',
+                        'shape': 'round-rectangle',
+                        'width': 'label',
+                        'height': 'label',
+                        'padding': '10px',
+                        'text-margin-y': 5
+                    }
+                },
+                {
+                    selector: 'node[type = "source"]',
+                    style: {
+                        'background-color': '#0d6efd',
+                        'color': '#fff',
+                        'border-color': '#0a58ca',
+                        'font-weight': 'bold',
+                        'font-size': '12px',
+                        'width': 'label',
+                        'height': 'label',
+                        'padding': '15px'
+                    }
+                },
+                {
+                    selector: 'node[type = "citing"]',
+                    style: {
+                        'background-color': '#198754',
+                        'color': '#fff',
+                        'border-color': '#146c43'
+                    }
+                },
+                {
+                    selector: 'node[type = "cited"]',
+                    style: {
+                        'background-color': '#0dcaf0',
+                        'color': '#000',
+                        'border-color': '#0aa2c0'
+                    }
+                },
+                {
+                    selector: 'node[type = "secondary"]',
+                    style: {
+                        'background-color': '#6c757d',
+                        'color': '#fff',
+                        'border-color': '#565e64'
+                    }
+                },
+                {
+                    selector: 'node.selected',
+                    style: {
+                        'border-width': 3,
+                        'border-color': '#ffc107',
+                        'border-style': 'double'
+                    }
+                },
+                {
+                    selector: 'edge',
+                    style: {
+                        'width': 1,
+                        'line-color': '#999',
+                        'curve-style': 'bezier',
+                        'target-arrow-shape': 'triangle',
+                        'target-arrow-color': '#999',
+                        'arrow-scale': 0.8
+                    }
+                },
+                {
+                    selector: 'edge[type = "cites"]',
+                    style: {
+                        'width': 1.5,
+                        'opacity': 1
+                    }
+                },
+                {
+                    selector: 'edge[type = "cocitation"]',
+                    style: {
+                        'width': 1,
+                        'line-color': '#6c757d',
+                        'target-arrow-shape': 'none',
+                        'line-style': 'dashed',
+                        'opacity': 0.7
+                    }
+                },
+                {
+                    selector: 'edge[type = "secondary"]',
+                    style: {
+                        'width': 1,
+                        'line-color': '#adb5bd',
+                        'opacity': 0.6
+                    }
+                }
+            ],
+            layout: {
+                name: 'fcose',
+                nodeDimensionsIncludeLabels: true,
+                randomize: true,
+                nodeRepulsion: 8000,
+                idealEdgeLength: 150,
+                edgeElasticity: 0.45,
+                nestingFactor: 0.1,
+                gravity: 0.25,
+                numIter: 2500,
+                tile: true,
+                tilingPaddingVertical: 10,
+                tilingPaddingHorizontal: 10,
+                quality: 'default',
+                fit: true,
+                padding: 30,
+                animate: true,
+                animationDuration: 1000,
+                animationEasing: 'ease-out',
+                packComponents: true
+            }
+        });
+        
+        // Node click event
+        cy.on('tap', 'node', function(evt) {
+            // Deselect previous node if any
+            if (selectedNode) {
+                selectedNode.removeClass('selected');
+            }
+            
+            // Select current node
+            selectedNode = evt.target;
+            selectedNode.addClass('selected');
+            
+            // Show paper details
+            showPaperDetails(selectedNode);
+        });
+        
+        // Background click to deselect
+        cy.on('tap', function(evt) {
+            if (evt.target === cy) {
+                if (selectedNode) {
+                    selectedNode.removeClass('selected');
+                    selectedNode = null;
+                    hideDetailsPanel();
+                }
+            }
+        });
+    }
+    
+    function showPaperDetails(node) {
+        const data = node.data();
+        const pmid = data.id;
+        
+        // Basic details HTML
+        let detailsHtml = `
+            <div class="card mb-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span class="badge ${getTypeClass(data.type)}">${capitalizeFirstLetter(data.type)}</span>
+                    <span class="badge bg-secondary">PMID: ${pmid}</span>
+                </div>
+                <div class="card-body">
+                    <h5 class="card-title">${data.label}</h5>
+                    <p class="card-text text-muted">
+                        <strong>${data.authors}</strong><br>
+                        ${data.journal} ${data.year ? `(${data.year})` : ''}
+                    </p>
+                    <div class="d-flex">
+                        <a href="https://pubmed.ncbi.nlm.nih.gov/${pmid}/" target="_blank" class="btn btn-sm btn-outline-primary me-2">
+                            <i class="fas fa-external-link-alt me-1"></i>View on PubMed
+                        </a>
+                        <button class="btn btn-sm btn-outline-success focus-node-btn">
+                            <i class="fas fa-project-diagram me-1"></i>Focus Network on This
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        // Add connections information
+        if (cy) {
+            detailsHtml += `<div class="card"><div class="card-body">`;
+            
+            // Get papers cited by this paper
+            const citesEdges = node.connectedEdges('[source = "' + pmid + '"][type = "cites"]');
+            if (citesEdges.length > 0) {
+                detailsHtml += `<h6 class="mt-3 mb-2 small text-success">Papers cited by this:</h6>`;
+                citesEdges.forEach(edge => {
+                    const targetNode = edge.target();
+                    const targetData = targetNode.data();
+                    detailsHtml += `
+                        <button class="list-group-item list-group-item-action paper-link border-success border-start border-3" data-node-id="${targetNode.id()}">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <strong>${targetData.label}</strong>
+                                    <div class="small text-muted">${targetData.authors}</div>
+                                </div>
+                                <span class="badge bg-success text-white">${targetData.year}</span>
+                            </div>
+                        </button>
+                    `;
+                });
+            }
+            
+            // Get papers citing this paper
+            const citedByEdges = node.connectedEdges('[target = "' + pmid + '"][type = "cites"]');
+            if (citedByEdges.length > 0) {
+                detailsHtml += `<h6 class="mt-3 mb-2 small text-info">Papers citing this:</h6>`;
+                citedByEdges.forEach(edge => {
+                    const sourceNode = edge.source();
+                    const sourceData = sourceNode.data();
+                    detailsHtml += `
+                        <button class="list-group-item list-group-item-action paper-link border-info border-start border-3" data-node-id="${sourceNode.id()}">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <strong>${sourceData.label}</strong>
+                                    <div class="small text-muted">${sourceData.authors}</div>
+                                </div>
+                                <span class="badge bg-info text-dark">${sourceData.year}</span>
+                            </div>
+                        </button>
+                    `;
+                });
+            }
+            
+            detailsHtml += `</div></div>`;
+        }
+        
+        // Set the content and show the panel
+        detailsContent.innerHTML = detailsHtml;
+        detailsPanel.style.transform = 'translateX(0)';
+        
+        // Add event listener for the "Focus Network on This" button
+        detailsPanel.querySelector('.focus-node-btn').addEventListener('click', function() {
+            // Close the panel
+            hideDetailsPanel();
+            
+            // Update PMID input and regenerate network
+            pmidInput.value = pmid;
+            searchQuery.value = '';
+            
+            // Regenerate network
+            generateNetwork();
+        });
+        
+        // Add event listeners for connected paper links
+        document.querySelectorAll('.paper-link').forEach(link => {
+            link.addEventListener('click', function() {
+                const nodeId = this.getAttribute('data-node-id');
+                const targetNode = cy.getElementById(nodeId);
+                if (targetNode.length > 0) {
+                    // Deselect current node
+                    if (selectedNode) {
+                        selectedNode.removeClass('selected');
+                    }
+                    
+                    // Select new node
+                    selectedNode = targetNode;
+                    selectedNode.addClass('selected');
+                    
+                    // Center the view on the new node
+                    cy.animate({
+                        center: { eles: targetNode },
+                        duration: 500
+                    });
+                    
+                    // Update details panel
+                    showPaperDetails(targetNode);
+                }
+            });
+        });
+    }
+    
+    function hideDetailsPanel() {
+        detailsPanel.style.transform = 'translateX(100%)';
+    }
+    
+    function showError(message) {
+        networkErrorContainer.textContent = message;
+        networkErrorContainer.style.display = 'block';
+    }
+    
+    function resetNetworkView() {
+        if (cy) {
+            cy.destroy();
+            cy = null;
+        }
+        
+        networkContainer.style.display = 'none';
+        networkErrorContainer.style.display = 'none';
+        emptyNetworkMessage.style.display = 'none';
+        loadingIndicator.style.display = 'none';
+        controlsContainer.style.display = 'none';
+        document.querySelector('.network-info-container').style.display = 'none';
+        document.querySelector('.network-legend').style.display = 'none';
+        
+        // Clear the network container
+        networkContainer.innerHTML = '';
+        
+        // Hide details panel
+        hideDetailsPanel();
+        selectedNode = null;
+    }
+    
+    function getTypeClass(type) {
+        switch (type) {
+            case 'source': return 'bg-primary';
+            case 'citing': return 'bg-success';
+            case 'cited': return 'bg-info text-dark';
+            default: return 'bg-secondary';
+        }
+    }
+    
+    function capitalizeFirstLetter(string) {
+        return string.charAt(0).toUpperCase() + string.slice(1);
+    }
+});
+</script>
+{% endblock %} 

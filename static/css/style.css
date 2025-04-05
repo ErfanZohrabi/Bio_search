@@ -211,18 +211,51 @@ header a:hover::after {
 }
 
 .result-item {
-    border-left: 4px solid var(--primary-color);
-    padding: 1.25rem;
-    margin-bottom: 1.25rem;
-    background-color: white;
-    border-radius: 0.5rem;
+    position: relative;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.75rem;
+    margin-bottom: 1.5rem;
+    padding: 1.5rem;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-    transition: var(--transition-normal);
+    transition: all 0.3s ease;
+    background-color: white;
+    animation: fadeIn 0.5s ease forwards;
+    cursor: pointer;
 }
 
 .result-item:hover {
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     transform: translateY(-2px);
+    border-color: #cbd5e1;
+}
+
+.result-item .form-check {
+    width: 90%;
+    padding-left: 0;
+}
+
+.result-item .form-check-input {
+    margin-right: 10px;
+    cursor: pointer;
+    width: 20px;
+    height: 20px;
+}
+
+.result-item .form-check-label {
+    width: 100%;
+    cursor: pointer;
+}
+
+.result-item.selected, 
+.result-item:has(.form-check-input:checked) {
+    border-color: var(--primary-color);
+    background-color: rgba(37, 99, 235, 0.05);
+    box-shadow: 0 0 0 1px var(--primary-color), 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.result-checkbox:checked + .form-check-label .result-title {
+    color: var(--primary-color);
+    font-weight: 700;
 }
 
 .result-item:last-child {

@@ -2,9 +2,6 @@
 
 BioSearch is a comprehensive biological database search system that integrates multiple biological databases containing pathway and protein information in humans and related organisms.
 
-## Live Application
-Access the live BioSearch application: [BioSearch App](https://biosearch.onrender.com) __  [BioSearch doc](https://erfanzohrabi.github.io/Bio_search/) 
-
 
 ## Features
 
@@ -29,6 +26,24 @@ BioSearch seamlessly connects to multiple biological databases:
 - **Web and CLI Interfaces**: Access via browser or command line
 - **RESTful API**: Programmatic access for integration with other tools
 
+### Advanced Network Visualization
+- **Protein Interaction Networks**: Visualize protein-protein interactions from STRING/STITCH databases
+  - Interactive node exploration
+  - Configurable interaction confidence scores
+  - Detailed protein information panels
+  - Network export functionality
+  
+  ![Protein Network Example](network_protein.png)
+
+- **Publication Co-citation Networks**: Explore relationships between scientific papers
+  - Visualize citation networks based on PubMed data
+  - Identify influential papers in research fields
+  - Interactive paper details and metadata
+  - Discover research trends and connections
+  
+  ![Publication Network Example](network_publication_example.png)
+  ![Publication Network Example 2](pubmed-network-12345678-.png)
+
 ## Technologies Used
 
 BioSearch is built with the following technologies:
@@ -43,6 +58,7 @@ BioSearch is built with the following technologies:
 - **HTML5/CSS3**: Modern, responsive web interface
 - **JavaScript**: Dynamic content and asynchronous requests
 - **Bootstrap**: UI framework for responsive design
+- **Cytoscape.js**: Graph visualization library for network displays
 
 ### Data Processing
 - **Biopython**: Biological computation library
@@ -125,6 +141,22 @@ python app.py
 
 Then open your browser and navigate to `http://localhost:5000`.
 
+### Using the Advanced Network Features
+
+#### Protein Interaction Networks
+1. Search for a protein (e.g., P04637 for TP53)
+2. Select the protein from search results
+3. Click "View Network" to visualize protein-protein interactions
+4. Explore the network by clicking on nodes to see details
+5. Adjust visualization settings using the control panel
+
+#### Publication Co-citation Networks
+1. Navigate to the Publication Network page
+2. Enter a PMID (e.g., 12345678) or a search term
+3. Click "Generate Network" to visualize the citation relationships
+4. Explore papers that cite or are cited by the source paper
+5. Click on nodes to view publication details and navigate between related papers
+
 ### Using the CLI
 
 The BioSearch CLI provides a convenient way to search databases from the command line:
@@ -191,6 +223,18 @@ response = requests.get(
 
 results = response.json()
 print(json.dumps(results, indent=2))
+
+# Get protein interaction network data
+network_response = requests.get(
+    'http://localhost:5000/api/network/string-data',
+    params={
+        'identifiers': 'P04637',
+        'species': '9606',
+        'score': 0.4
+    }
+)
+
+network_data = network_response.json()
 ```
 
 For detailed API documentation, visit `http://localhost:5000/api_docs` when the server is running.
@@ -205,6 +249,7 @@ BioSearch uses a standardized data model to represent biological entities:
 - **Drug**: Chemical information, targets, and mechanisms of action
 - **Publication**: Literature references
 - **Structure**: Protein 3D structural information
+- **Network**: Relationship data for visualizing connections between entities
 
 ## Extending BioSearch
 
@@ -259,6 +304,13 @@ ssl_context.verify_mode = ssl.CERT_NONE
 - Check if the database APIs are functioning and not rate-limited
 - For better rate limits on NCBI, obtain an API key and add it to your `.env` file
 
+### Network Visualization Issues
+
+- Make sure your browser supports modern JavaScript features
+- Clear your browser cache if visualizations don't display correctly
+- For STRING/STITCH networks, ensure identifiers are in the correct format
+- For publication networks, use valid PMIDs or specific search terms
+
 ### Installation Problems
 
 - Make sure you have Python 3.9+ installed
@@ -284,6 +336,7 @@ BioSearch uses the following public APIs:
 - KEGG API
 - PDB API
 - Ensembl REST API
+- STRING/STITCH API for protein interactions
 
 ## License
 

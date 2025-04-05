@@ -1,0 +1,537 @@
+{% extends "base.html" %}
+
+{% block title %}Network Visualization - BioSearch{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row">
+        <div class="col-12">
+            <h2>Network Visualization</h2>
+            <div class="card">
+                <div class="card-body">
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label for="networkType" class="form-label">Network Type</label>
+                            <select class="form-select" id="networkType">
+                                <option value="string">Protein/Gene Network (STRING)</option>
+                                <option value="stitch">Drug-Target Network (STITCH)</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="species" class="form-label">Species</label>
+                            <select class="form-select" id="species">
+                                <option value="9606">Human (9606)</option>
+                                <option value="10090">Mouse (10090)</option>
+                                <option value="10116">Rat (10116)</option>
+                                <option value="4932">Yeast (4932)</option>
+                                <option value="562">E. coli (562)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label for="interactionType" class="form-label">Interaction Type</label>
+                            <select class="form-select" id="interactionType">
+                                <option value="full">Full Network</option>
+                                <option value="physical">Physical Interactions</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="confidence" class="form-label">Minimum Confidence</label>
+                            <select class="form-select" id="confidence">
+                                <option value="0.9">Highest (0.900)</option>
+                                <option value="0.7">High (0.700)</option>
+                                <option value="0.4" selected>Medium (0.400)</option>
+                                <option value="0.15">Low (0.150)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col-12">
+                            <button id="updateNetworkBtn" class="btn btn-primary">Update Network</button>
+                        </div>
+                    </div>
+                    <div id="loadingIndicator" class="text-center p-4" style="display: none;">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                        <p class="mt-3">Fetching network data...</p>
+                    </div>
+                    <div id="networkError" class="alert alert-danger" style="display: none;"></div>
+                    <div class="row">
+                        <div class="col-12">
+                            <div id="networkContainer" class="network-container" style="height: 600px; border: 1px solid #ddd; border-radius: 4px; display: none;"></div>
+                        </div>
+                    </div>
+                    <div id="networkControls" class="mt-3" style="display: none;">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div class="btn-group" role="group">
+                                <button id="zoomInBtn" class="btn btn-sm btn-outline-secondary"><i class="fas fa-search-plus"></i></button>
+                                <button id="zoomOutBtn" class="btn btn-sm btn-outline-secondary"><i class="fas fa-search-minus"></i></button>
+                                <button id="fitBtn" class="btn btn-sm btn-outline-secondary"><i class="fas fa-expand"></i> Fit</button>
+                            </div>
+                            <div>
+                                <button id="downloadPngBtn" class="btn btn-sm btn-outline-primary">
+                                    <i class="fas fa-download"></i> Export Image
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="networkLegend" class="mt-3 network-legend" style="display: none;">
+                        <h6>Legend:</h6>
+                        <div class="d-flex flex-wrap">
+                            <div id="proteinLegend" class="me-4 mb-2">
+                                <span class="badge bg-primary rounded-circle">&nbsp;</span> Protein/Gene
+                            </div>
+                            <div id="drugLegend" class="me-4 mb-2" style="display: none;">
+                                <span class="badge bg-success rounded-circle">&nbsp;</span> Drug/Chemical
+                            </div>
+                            <div id="queryLegend" class="me-4 mb-2">
+                                <span class="badge bg-warning text-dark rounded-circle">&nbsp;</span> Query
+                            </div>
+                        </div>
+                        <div class="d-flex flex-wrap mt-2">
+                            <div class="me-4 mb-2">
+                                <span style="display: inline-block; width: 20px; height: 2px; background-color: #666;"></span> Strong Interaction
+                            </div>
+                            <div class="me-4 mb-2">
+                                <span style="display: inline-block; width: 20px; height: 1px; background-color: #999;"></span> Weak Interaction
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Node Details Side Panel -->
+    <div id="detailsPanel" class="position-fixed end-0 top-0 h-100 bg-white shadow p-3" style="width: 350px; z-index: 1050; transform: translateX(100%); transition: transform 0.3s ease-out; overflow-y: auto;">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5 id="detailsTitle">Node Details</h5>
+            <button id="closeDetailsBtn" class="btn-close" aria-label="Close"></button>
+        </div>
+        <div id="detailsContent"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<!-- Include Cytoscape.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.23.0/cytoscape.min.js"></script>
+<!-- Include FileSaver.js for downloading images -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // DOM Elements
+    const networkType = document.getElementById('networkType');
+    const species = document.getElementById('species');
+    const confidence = document.getElementById('confidence');
+    const interactionType = document.getElementById('interactionType');
+    const updateNetworkBtn = document.getElementById('updateNetworkBtn');
+    const networkContainer = document.getElementById('networkContainer');
+    const loadingIndicator = document.getElementById('loadingIndicator');
+    const networkError = document.getElementById('networkError');
+    const networkControls = document.getElementById('networkControls');
+    const networkLegend = document.getElementById('networkLegend');
+    const drugLegend = document.getElementById('drugLegend');
+    const zoomInBtn = document.getElementById('zoomInBtn');
+    const zoomOutBtn = document.getElementById('zoomOutBtn');
+    const fitBtn = document.getElementById('fitBtn');
+    const downloadPngBtn = document.getElementById('downloadPngBtn');
+    const detailsPanel = document.getElementById('detailsPanel');
+    const closeDetailsBtn = document.getElementById('closeDetailsBtn');
+    const detailsContent = document.getElementById('detailsContent');
+    
+    // Get query parameters from URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const identifiers = urlParams.get('identifiers')?.split(',') || [];
+    const initialType = urlParams.get('type') || 'string';
+    
+    // Set initial network type from URL
+    if (initialType === 'stitch') {
+        networkType.value = 'stitch';
+    }
+    
+    // Cytoscape instance
+    let cy = null;
+    let selectedNode = null;
+    
+    // Initialize
+    if (identifiers.length > 0) {
+        updateNetwork();
+    }
+    
+    // Event Listeners
+    updateNetworkBtn.addEventListener('click', updateNetwork);
+    zoomInBtn.addEventListener('click', function() {
+        if (cy) cy.zoom(cy.zoom() * 1.2);
+    });
+    zoomOutBtn.addEventListener('click', function() {
+        if (cy) cy.zoom(cy.zoom() / 1.2);
+    });
+    fitBtn.addEventListener('click', function() {
+        if (cy) cy.fit();
+    });
+    downloadPngBtn.addEventListener('click', function() {
+        if (cy) {
+            const png = cy.png({
+                output: 'blob',
+                bg: 'white',
+                full: true,
+                scale: 2.0
+            });
+            saveAs(png, `biosearch-network-${new Date().toISOString().slice(0, 10)}.png`);
+        }
+    });
+    closeDetailsBtn.addEventListener('click', function() {
+        hideDetailsPanel();
+        if (selectedNode && cy) {
+            selectedNode.removeClass('selected');
+            selectedNode = null;
+        }
+    });
+    
+    function updateNetwork() {
+        if (identifiers.length === 0) {
+            showError("No identifiers provided. Please search for items and select them for visualization.");
+            return;
+        }
+        
+        // Reset state
+        if (cy) {
+            cy.destroy();
+            cy = null;
+        }
+        hideDetailsPanel();
+        networkContainer.style.display = 'none';
+        networkControls.style.display = 'none';
+        networkLegend.style.display = 'none';
+        networkError.style.display = 'none';
+        loadingIndicator.style.display = 'block';
+        
+        // Update UI based on network type
+        if (networkType.value === 'stitch') {
+            drugLegend.style.display = 'block';
+        } else {
+            drugLegend.style.display = 'none';
+        }
+        
+        // Construct API URL based on selected network type
+        const apiEndpoint = networkType.value === 'string' 
+            ? '/api/network/string-data'
+            : '/api/network/stitch-data';
+        
+        // Build query parameters
+        const params = new URLSearchParams();
+        params.append('identifiers', identifiers.join(','));
+        params.append('species', species.value);
+        params.append('score', confidence.value);
+        
+        if (interactionType.value === 'physical') {
+            params.append('network_type', 'physical');
+        }
+        
+        // Fetch network data
+        fetch(`${apiEndpoint}?${params.toString()}`)
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(data => {
+                        throw new Error(data.error || 'Failed to fetch network data');
+                    });
+                }
+                return response.json();
+            })
+            .then(data => {
+                loadingIndicator.style.display = 'none';
+                
+                if (!data.elements || !data.elements.nodes || data.elements.nodes.length === 0) {
+                    showError('No network data available for the selected identifiers.');
+                    return;
+                }
+                
+                renderNetwork(data);
+                networkContainer.style.display = 'block';
+                networkControls.style.display = 'block';
+                networkLegend.style.display = 'block';
+            })
+            .catch(error => {
+                loadingIndicator.style.display = 'none';
+                showError(error.message);
+            });
+    }
+    
+    function renderNetwork(data) {
+        // Mark query identifiers
+        data.elements.nodes.forEach(node => {
+            if (identifiers.includes(node.data.id) || 
+                identifiers.includes(node.data.string_id) || 
+                identifiers.includes(node.data.stitch_id)) {
+                node.data.isQuery = true;
+            }
+        });
+        
+        // Set up Cytoscape
+        cy = cytoscape({
+            container: networkContainer,
+            elements: data.elements,
+            style: [
+                // Node styles
+                {
+                    selector: 'node',
+                    style: {
+                        'background-color': '#7986CB',
+                        'label': 'data(label)',
+                        'color': '#fff',
+                        'text-outline-width': 2,
+                        'text-outline-color': '#7986CB',
+                        'font-size': '10px',
+                        'text-valign': 'center',
+                        'text-halign': 'center',
+                        'text-wrap': 'wrap',
+                        'text-max-width': '80px',
+                        'width': 40,
+                        'height': 40,
+                        'border-width': 0
+                    }
+                },
+                {
+                    selector: 'node[type = "chemical"]',
+                    style: {
+                        'background-color': '#4CAF50',
+                        'text-outline-color': '#4CAF50',
+                        'shape': 'round-rectangle',
+                        'width': 45,
+                        'height': 30
+                    }
+                },
+                {
+                    selector: 'node[isQuery]',
+                    style: {
+                        'background-color': '#FFC107',
+                        'text-outline-color': '#FFC107',
+                        'color': '#000',
+                        'font-weight': 'bold',
+                        'width': 50,
+                        'height': 50,
+                        'font-size': '12px',
+                        'z-index': 10
+                    }
+                },
+                // Edge styles
+                {
+                    selector: 'edge',
+                    style: {
+                        'width': 'mapData(weight, 0, 1, 1, 5)',
+                        'line-color': '#999',
+                        'opacity': 'mapData(weight, 0, 1, 0.5, 1)',
+                        'target-arrow-shape': 'none',
+                        'curve-style': 'bezier',
+                        'target-distance-from-node': 10,
+                        'source-distance-from-node': 10,
+                        'z-index': 1
+                    }
+                },
+                // Highlighted elements
+                {
+                    selector: 'node.highlight',
+                    style: {
+                        'border-width': 3,
+                        'border-color': '#FFC107',
+                        'z-index': 20
+                    }
+                },
+                {
+                    selector: 'node.selected',
+                    style: {
+                        'border-width': 4,
+                        'border-color': '#FF5722',
+                        'z-index': 30
+                    }
+                },
+                {
+                    selector: 'edge.highlight',
+                    style: {
+                        'line-color': '#FFC107',
+                        'width': 'mapData(weight, 0, 1, 3, 8)',
+                        'opacity': 1,
+                        'z-index': 20
+                    }
+                }
+            ],
+            layout: {
+                name: 'cose',
+                idealEdgeLength: 150,
+                nodeOverlap: 20,
+                refresh: 20,
+                fit: true,
+                padding: 30,
+                randomize: false,
+                componentSpacing: 100,
+                nodeRepulsion: 1400000,
+                edgeElasticity: 100,
+                nestingFactor: 5,
+                gravity: 80,
+                numIter: 1000,
+                initialTemp: 200,
+                coolingFactor: 0.95,
+                minTemp: 1.0
+            }
+        });
+        
+        // Add hover effects
+        cy.on('mouseover', 'node', function(e) {
+            const node = e.target;
+            node.addClass('highlight');
+            
+            const connectedEdges = node.connectedEdges();
+            connectedEdges.addClass('highlight');
+            
+            const connectedNodes = connectedEdges.connectedNodes().difference(node);
+            connectedNodes.addClass('highlight');
+        });
+        
+        cy.on('mouseout', 'node', function(e) {
+            // Only remove highlight classes, not selected
+            cy.elements().removeClass('highlight');
+        });
+        
+        // Add click event for node details
+        cy.on('tap', 'node', function(evt) {
+            const node = evt.target;
+            
+            // If there was a previously selected node, remove its selected status
+            if (selectedNode && selectedNode.id() !== node.id()) {
+                selectedNode.removeClass('selected');
+            }
+            
+            // Set the new selected node
+            selectedNode = node;
+            node.addClass('selected');
+            
+            // Show details panel
+            showNodeDetails(node);
+        });
+        
+        // Add click event for background to deselect
+        cy.on('tap', function(evt) {
+            if (evt.target === cy) {
+                // Click on background
+                if (selectedNode) {
+                    selectedNode.removeClass('selected');
+                    selectedNode = null;
+                    hideDetailsPanel();
+                }
+            }
+        });
+    }
+    
+    function showNodeDetails(node) {
+        const data = node.data();
+        const isProtein = data.type !== 'chemical';
+        const idType = isProtein ? 
+            (networkType.value === 'string' ? 'STRING ID' : 'STITCH ID') : 
+            'Chemical ID';
+        const idValue = isProtein ? 
+            (data.string_id || data.stitch_id || data.id) : 
+            data.stitch_id || data.id;
+        
+        // Create details HTML
+        let detailsHtml = `
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">${data.label}</h5>
+                    <p class="card-text"><strong>${idType}:</strong> ${idValue}</p>
+                    <p class="card-text"><strong>Type:</strong> ${isProtein ? 'Protein/Gene' : 'Drug/Chemical'}</p>
+                    <p class="card-text"><strong>Connections:</strong> ${node.connectedEdges().length}</p>
+                </div>
+            </div>
+        `;
+        
+        // Add external links
+        detailsHtml += `
+            <div class="list-group mt-3">
+                <a href="https://www.uniprot.org/uniprot/?query=${encodeURIComponent(data.label)}" target="_blank" 
+                   class="list-group-item list-group-item-action ${!isProtein ? 'disabled' : ''}">
+                    <i class="fas fa-external-link-alt me-2"></i>View in UniProt
+                </a>
+                <a href="https://pubchem.ncbi.nlm.nih.gov/search/#collection=compounds&query=${encodeURIComponent(data.label)}" target="_blank" 
+                   class="list-group-item list-group-item-action ${isProtein ? 'disabled' : ''}">
+                    <i class="fas fa-external-link-alt me-2"></i>View in PubChem
+                </a>
+                <a href="https://pubmed.ncbi.nlm.nih.gov/?term=${encodeURIComponent(data.label)}" target="_blank" 
+                   class="list-group-item list-group-item-action">
+                    <i class="fas fa-external-link-alt me-2"></i>Search in PubMed
+                </a>
+                <a href="/search?query=${encodeURIComponent(data.label)}" 
+                   class="list-group-item list-group-item-action">
+                    <i class="fas fa-search me-2"></i>Search in BioSearch
+                </a>
+            </div>
+        `;
+        
+        // Add related nodes section
+        const connectedNodes = node.neighborhood('node');
+        if (connectedNodes.length > 0) {
+            detailsHtml += `
+                <div class="mt-3">
+                    <h6>Connected Nodes (${connectedNodes.length}):</h6>
+                    <div class="list-group connected-nodes-list" style="max-height: 200px; overflow-y: auto;">
+            `;
+            
+            connectedNodes.forEach(connNode => {
+                const connData = connNode.data();
+                detailsHtml += `
+                    <button class="list-group-item list-group-item-action node-link" data-node-id="${connNode.id()}">
+                        ${connData.label}
+                    </button>
+                `;
+            });
+            
+            detailsHtml += `</div></div>`;
+        }
+        
+        // Set the content and show the panel
+        detailsContent.innerHTML = detailsHtml;
+        detailsPanel.style.transform = 'translateX(0)';
+        
+        // Add event listeners to connected node links
+        document.querySelectorAll('.node-link').forEach(link => {
+            link.addEventListener('click', function() {
+                const nodeId = this.getAttribute('data-node-id');
+                const targetNode = cy.getElementById(nodeId);
+                if (targetNode.length > 0) {
+                    // Deselect current node
+                    if (selectedNode) {
+                        selectedNode.removeClass('selected');
+                    }
+                    
+                    // Select new node
+                    selectedNode = targetNode;
+                    selectedNode.addClass('selected');
+                    
+                    // Center the view on the new node
+                    cy.animate({
+                        center: { eles: targetNode },
+                        duration: 500
+                    });
+                    
+                    // Update details panel
+                    showNodeDetails(targetNode);
+                }
+            });
+        });
+    }
+    
+    function hideDetailsPanel() {
+        detailsPanel.style.transform = 'translateX(100%)';
+        detailsContent.innerHTML = '';
+    }
+    
+    function showError(message) {
+        networkError.textContent = message;
+        networkError.style.display = 'block';
+        loadingIndicator.style.display = 'none';
+    }
+});
+</script>
+{% endblock %} 

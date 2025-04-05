@@ -20,16 +20,13 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 # Try to import Redis dependencies
-# Try to import Redis dependencies
 try:
     import redis
     import aioredis
     REDIS_AVAILABLE = True
-except (ImportError, TypeError):
-    redis = None
-    aioredis = None
-    REDIS_AVAILABLE = False
+except ImportError:
     logger.warning("Redis dependencies not installed. Using in-memory cache as fallback.")
+    REDIS_AVAILABLE = False
 
 # Cache configuration
 CACHE_TTL = int(os.getenv('CACHE_TTL', 3600))  # 1 hour default
@@ -76,6 +73,7 @@ class Cache:
             except Exception as e:
                 logger.warning(f"Failed to connect to Redis async client: {str(e)}. Using in-memory cache.")
                 self._aioredis = None
+    
     def _get_key(self, key: str) -> str:
         """
         Format a cache key with the prefix.

@@ -155,6 +155,23 @@ document.addEventListener('DOMContentLoaded', function() {
         databaseTabs.innerHTML = tabsHtml;
         databaseContent.innerHTML = contentHtml;
         
+        // Make result items clickable to toggle checkboxes
+        document.querySelectorAll('.result-item').forEach(item => {
+            item.addEventListener('click', function(e) {
+                // Skip if click was on a link or checkbox directly
+                if (e.target.tagName === 'A' || e.target.tagName === 'INPUT' || 
+                    e.target.closest('a') || e.target.closest('.form-check-input')) {
+                    return;
+                }
+                
+                // Find the checkbox within this item and toggle it
+                const checkbox = this.querySelector('.form-check-input');
+                if (checkbox) {
+                    checkbox.checked = !checkbox.checked;
+                }
+            });
+        });
+        
         // Show success toast
         showToast(`Search completed. Found results in ${Object.keys(results).length} database(s).`, 'success');
         
@@ -187,20 +204,23 @@ document.addEventListener('DOMContentLoaded', function() {
         dbResults.forEach((result, index) => {
             if (database === 'NCBI') {
                 html += `
-                    <div class="result-item" style="animation-delay: ${index * 0.05}s;">
+                    <div class="result-item" data-id="${result.id}" style="animation-delay: ${index * 0.05}s;">
                         <div class="d-flex justify-content-between align-items-start">
-                            <div>
-                                <h3 class="result-title h5">${result.name || 'Unknown'}</h3>
-                                <div class="result-meta">
-                                    <span class="result-meta-item" data-bs-toggle="tooltip" title="NCBI Gene ID">
-                                        <i class="fas fa-fingerprint"></i> ${result.id}
-                                    </span>
-                                    <span class="result-meta-item" data-bs-toggle="tooltip" title="Organism">
-                                        <i class="fas fa-leaf"></i> ${result.organism || 'N/A'}
-                                    </span>
-                                </div>
+                            <div class="form-check">
+                                <input class="form-check-input result-checkbox" type="checkbox" value="${result.id}" id="result-${result.id}">
+                                <label class="form-check-label" for="result-${result.id}">
+                                    <h3 class="result-title h5">${result.name || 'Unknown'}</h3>
+                                </label>
                             </div>
                             <span class="badge badge-${dbClass}"><i class="fas fa-dna"></i></span>
+                        </div>
+                        <div class="result-meta">
+                            <span class="result-meta-item" data-bs-toggle="tooltip" title="NCBI Gene ID">
+                                <i class="fas fa-fingerprint"></i> ${result.id}
+                            </span>
+                            <span class="result-meta-item" data-bs-toggle="tooltip" title="Organism">
+                                <i class="fas fa-leaf"></i> ${result.organism || 'N/A'}
+                            </span>
                         </div>
                         <p>${result.description || 'No description available.'}</p>
                         <a href="${result.url}" target="_blank" class="result-link">
@@ -210,26 +230,29 @@ document.addEventListener('DOMContentLoaded', function() {
                 `;
             } else if (database === 'PubMed') {
                 html += `
-                    <div class="result-item" style="animation-delay: ${index * 0.05}s;">
+                    <div class="result-item" data-id="${result.id}" style="animation-delay: ${index * 0.05}s;">
                         <div class="d-flex justify-content-between align-items-start">
-                            <div>
-                                <h3 class="result-title h5">${result.title || 'Unknown'}</h3>
-                                <div class="result-meta">
-                                    <span class="result-meta-item" data-bs-toggle="tooltip" title="PubMed ID">
-                                        <i class="fas fa-hashtag"></i> ${result.id}
-                                    </span>
-                                    <span class="result-meta-item" data-bs-toggle="tooltip" title="Authors">
-                                        <i class="fas fa-users"></i> ${result.authors || 'N/A'}
-                                    </span>
-                                    <span class="result-meta-item" data-bs-toggle="tooltip" title="Journal">
-                                        <i class="fas fa-book"></i> ${result.journal || 'N/A'}
-                                    </span>
-                                    <span class="result-meta-item" data-bs-toggle="tooltip" title="Publication Date">
-                                        <i class="fas fa-calendar-alt"></i> ${result.pubdate || 'N/A'}
-                                    </span>
-                                </div>
+                            <div class="form-check">
+                                <input class="form-check-input result-checkbox" type="checkbox" value="${result.id}" id="result-${result.id}">
+                                <label class="form-check-label" for="result-${result.id}">
+                                    <h3 class="result-title h5">${result.title || 'Unknown'}</h3>
+                                </label>
                             </div>
                             <span class="badge badge-${dbClass}"><i class="fas fa-book-medical"></i></span>
+                        </div>
+                        <div class="result-meta">
+                            <span class="result-meta-item" data-bs-toggle="tooltip" title="PubMed ID">
+                                <i class="fas fa-hashtag"></i> ${result.id}
+                            </span>
+                            <span class="result-meta-item" data-bs-toggle="tooltip" title="Authors">
+                                <i class="fas fa-users"></i> ${result.authors || 'N/A'}
+                            </span>
+                            <span class="result-meta-item" data-bs-toggle="tooltip" title="Journal">
+                                <i class="fas fa-book"></i> ${result.journal || 'N/A'}
+                            </span>
+                            <span class="result-meta-item" data-bs-toggle="tooltip" title="Publication Date">
+                                <i class="fas fa-calendar-alt"></i> ${result.pubdate || 'N/A'}
+                            </span>
                         </div>
                         <a href="${result.url}" target="_blank" class="result-link">
                             View on PubMed <i class="fas fa-external-link-alt"></i>
@@ -238,24 +261,28 @@ document.addEventListener('DOMContentLoaded', function() {
                 `;
             } else if (database === 'UniProt') {
                 html += `
-                    <div class="result-item" style="animation-delay: ${index * 0.05}s;">
+                    <div class="result-item" data-id="${result.id}" style="animation-delay: ${index * 0.05}s;">
                         <div class="d-flex justify-content-between align-items-start">
-                            <div>
-                                <h3 class="result-title h5">${result.name || 'Unknown'}</h3>
-                                <div class="result-meta">
-                                    <span class="result-meta-item" data-bs-toggle="tooltip" title="UniProt Accession">
-                                        <i class="fas fa-id-card"></i> ${result.id}
-                                    </span>
-                                    <span class="result-meta-item" data-bs-toggle="tooltip" title="Gene">
-                                        <i class="fas fa-dna"></i> ${result.gene || 'N/A'}
-                                    </span>
-                                    <span class="result-meta-item" data-bs-toggle="tooltip" title="Organism">
-                                        <i class="fas fa-leaf"></i> ${result.organism || 'N/A'}
-                                    </span>
-                                </div>
+                            <div class="form-check">
+                                <input class="form-check-input result-checkbox" type="checkbox" value="${result.id}" id="result-${result.id}">
+                                <label class="form-check-label" for="result-${result.id}">
+                                    <h3 class="result-title h5">${result.name || 'Unknown'}</h3>
+                                </label>
                             </div>
                             <span class="badge badge-${dbClass}"><i class="fas fa-atom"></i></span>
                         </div>
+                        <div class="result-meta">
+                            <span class="result-meta-item" data-bs-toggle="tooltip" title="UniProt Accession">
+                                <i class="fas fa-id-card"></i> ${result.id}
+                            </span>
+                            <span class="result-meta-item" data-bs-toggle="tooltip" title="Gene">
+                                <i class="fas fa-dna"></i> ${result.gene || 'N/A'}
+                            </span>
+                            <span class="result-meta-item" data-bs-toggle="tooltip" title="Organism">
+                                <i class="fas fa-leaf"></i> ${result.organism || 'N/A'}
+                            </span>
+                        </div>
+                        <p>${result.description || 'No description available.'}</p>
                         <a href="${result.url}" target="_blank" class="result-link">
                             View on UniProt <i class="fas fa-external-link-alt"></i>
                         </a>
@@ -263,25 +290,27 @@ document.addEventListener('DOMContentLoaded', function() {
                 `;
             } else if (database === 'DrugBank') {
                 html += `
-                    <div class="result-item" style="animation-delay: ${index * 0.05}s;">
+                    <div class="result-item" data-id="${result.id}" style="animation-delay: ${index * 0.05}s;">
                         <div class="d-flex justify-content-between align-items-start">
-                            <div>
-                                <h3 class="result-title h5">${result.name || 'Unknown'}</h3>
-                                <div class="result-meta">
-                                    <span class="result-meta-item" data-bs-toggle="tooltip" title="DrugBank ID">
-                                        <i class="fas fa-id-badge"></i> ${result.id}
-                                    </span>
-                                    <span class="result-meta-item" data-bs-toggle="tooltip" title="Molecular Formula">
-                                        <i class="fas fa-flask"></i> ${result.formula || 'N/A'}
-                                    </span>
-                                </div>
+                            <div class="form-check">
+                                <input class="form-check-input result-checkbox" type="checkbox" value="${result.id}" id="result-${result.id}">
+                                <label class="form-check-label" for="result-${result.id}">
+                                    <h3 class="result-title h5">${result.name || 'Unknown'}</h3>
+                                </label>
                             </div>
                             <span class="badge badge-${dbClass}"><i class="fas fa-prescription-bottle-alt"></i></span>
                         </div>
-                        ${result.synonyms ? `<p><strong>Synonyms:</strong> ${result.synonyms}</p>` : ''}
-                        ${result.description ? `<p>${result.description}</p>` : ''}
+                        <div class="result-meta">
+                            <span class="result-meta-item" data-bs-toggle="tooltip" title="DrugBank ID">
+                                <i class="fas fa-id-card"></i> ${result.id}
+                            </span>
+                            <span class="result-meta-item" data-bs-toggle="tooltip" title="Type">
+                                <i class="fas fa-tag"></i> ${result.type || 'N/A'}
+                            </span>
+                        </div>
+                        <p>${result.description || 'No description available.'}</p>
                         <a href="${result.url}" target="_blank" class="result-link">
-                            View on DrugBank/PubChem <i class="fas fa-external-link-alt"></i>
+                            View on DrugBank <i class="fas fa-external-link-alt"></i>
                         </a>
                     </div>
                 `;

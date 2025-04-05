@@ -19,8 +19,16 @@ from api import (
 from api.db_helpers import ssl_context, NCBI_API_KEY
 from api.cache import cache
 from api.search_engine import unified_search, search_engine
+from api.string_db import get_network_url as get_string_network_url
+from api.stitch import get_drug_network_url as get_stitch_network_url
 import ssl
 import datetime
+import argparse
+import re
+import urllib.parse
+from typing import Dict, List, Any, Optional, Union
+from pydantic import BaseModel, Field, validator
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 # Load environment variables from .env file
 load_dotenv()
@@ -43,6 +51,64 @@ else:
     logger.info("MOCK MODE DISABLED: Using real API calls")
 
 app = Flask(__name__)
+
+# Define Pydantic models for data validation
+class PublicationNode(BaseModel):
+    id: str  # PMID
+    label: str  # Title
+    authors: str
+    year: str
+    journal: str
+    type: str  # source, citing, cited, secondary
+    
+class NetworkEdge(BaseModel):
+    source: str
+    target: str
+    type: str  # cites, cited_by, cocitation, secondary
+    weight: Optional[float] = 1.0
+    
+class NetworkData(BaseModel):
+    source_pmid: str
+    nodes: List[Dict[str, Any]]
+    edges: List[Dict[str, Any]]
+    metadata: Dict[str, Any]
+
+# Enhanced HTTP client with retry logic
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError))
+)
+async def robust_fetch(session, url, params=None, timeout=30.0):
+    """
+    Enhanced HTTP client with retry logic and better error handling
+    """
+    try:
+        async with session.get(url, params=params, timeout=timeout) as response:
+            if response.status == 429:  # Rate limit
+                logger.warning(f"Rate limit hit for {url}. Retrying...")
+                raise aiohttp.ClientResponseError(
+                    response.request_info, 
+                    response.history, 
+                    status=response.status, 
+                    message="Rate Limited"
+                )
+                
+            response.raise_for_status()  # Raise exception for 4xx/5xx errors
+            
+            # Decide whether to return json or text based on content type
+            if 'application/json' in response.headers.get('Content-Type', ''):
+                return await response.json()
+            else:
+                return await response.text()
+                
+    except asyncio.TimeoutError:
+        logger.error(f"Timeout error fetching {url}")
+        raise  # Re-raise to be caught by retry or caller
+        
+    except aiohttp.ClientError as e:
+        logger.error(f"Client error fetching {url}: {e}")
+        raise  # Re-raise to be caught by retry
 
 # Define search_pubmed as a wrapper around search_ncbi
 async def search_pubmed(session, query, retmax=10, ssl_context=None):
@@ -422,6 +488,773 @@ def about():
     """Render the about page."""
     return render_template('about.html', databases=DATABASES)
 
+@app.route('/network')
+def network_viewer():
+    """Render the network visualization page."""
+    identifiers = request.args.get('identifiers', '')
+    network_type = request.args.get('type', 'string')  # string or stitch
+    
+    if not identifiers:
+        return render_template('network_viewer.html', identifier_list=[])
+    
+    identifier_list = identifiers.split(',')
+    logger.info(f"Network visualization requested for {len(identifier_list)} identifiers, type: {network_type}")
+    
+    return render_template('network_viewer.html', identifier_list=identifier_list, network_type=network_type)
+
+@app.route('/api/network/string')
+def string_network():
+    """API endpoint to get network data from STRING db."""
+    identifiers = request.args.get('identifiers', '')
+    species = request.args.get('species', '9606')  # Default: human
+    score = request.args.get('score', '0.4')       # Default: medium confidence
+    network_type = request.args.get('network_type', '')  # physical, functional, etc.
+    
+    # Call directly to STRING with the appropriate parameters
+    network_url = get_string_network_url(identifiers, species, score, network_type)
+    
+    logger.info(f"STRING network URL: {network_url}")
+    return jsonify({"url": network_url})
+
+@app.route('/api/network/string-data')
+async def string_network_data():
+    """API endpoint to get network data from STRING API in Cytoscape format."""
+    identifiers = request.args.get('identifiers', '')
+    species = request.args.get('species', '9606')  # Default: human
+    score = request.args.get('score', '0.4')       # Default: medium confidence
+    network_type = request.args.get('network_type', '')  # physical, functional, etc.
+    
+    if not identifiers:
+        return jsonify({"error": "No identifiers provided"}), 400
+    
+    identifier_list = identifiers.split(',')
+    logger.info(f"STRING network data requested for {len(identifier_list)} identifiers")
+    
+    try:
+        # Use the enhanced HTTP client to fetch data from STRING API
+        connector = aiohttp.TCPConnector(ssl=ssl_context)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            # Fetch network data from STRING API
+            string_api_url = "https://string-db.org/api/json/network"
+            params = {
+                "identifiers": "\r".join(identifier_list),
+                "species": species,
+                "required_score": score
+            }
+            
+            if network_type:
+                params["network_type"] = network_type
+                
+            data = await robust_fetch(session, string_api_url, params)
+            
+            # Ensure data is properly parsed as JSON if it's a string
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except json.JSONDecodeError:
+                    logger.error(f"Error decoding JSON from STRING API: {data[:100]}...")
+                    return jsonify({"error": "Invalid response from STRING API"}), 500
+            
+            # Handle case where data is not a list
+            if not isinstance(data, list):
+                logger.error(f"Expected list from STRING API, got {type(data)}: {str(data)[:100]}...")
+                return jsonify({"error": "Unexpected response format from STRING API"}), 500
+                
+            # Convert to Cytoscape.js format
+            nodes = []
+            edges = []
+            seen_nodes = set()
+            
+            # Process network data
+            for item in data:
+                if not isinstance(item, dict):
+                    logger.warning(f"Skipping non-dictionary item in STRING response: {item}")
+                    continue
+                    
+                source_id = item.get("preferredName_A") or item.get("stringId_A", f"node_{len(seen_nodes)}")
+                target_id = item.get("preferredName_B") or item.get("stringId_B", f"node_{len(seen_nodes)+1}")
+                score = item.get("score", 0)
+                
+                # Add source node if not seen before
+                if source_id not in seen_nodes:
+                    nodes.append({
+                        "data": {
+                            "id": source_id,
+                            "label": item.get("preferredName_A", source_id),
+                            "string_id": item.get("stringId_A", ""),
+                            "type": "protein"
+                        }
+                    })
+                    seen_nodes.add(source_id)
+                
+                # Add target node if not seen before
+                if target_id not in seen_nodes:
+                    nodes.append({
+                        "data": {
+                            "id": target_id,
+                            "label": item.get("preferredName_B", target_id),
+                            "string_id": item.get("stringId_B", ""),
+                            "type": "protein"
+                        }
+                    })
+                    seen_nodes.add(target_id)
+                
+                # Add edge
+                edges.append({
+                    "data": {
+                        "id": f"{source_id}-{target_id}",
+                        "source": source_id,
+                        "target": target_id,
+                        "weight": score,
+                        "interaction": item.get("action", "interaction")
+                    }
+                })
+            
+            return jsonify({
+                "elements": {
+                    "nodes": nodes,
+                    "edges": edges
+                },
+                "metadata": {
+                    "total_nodes": len(nodes),
+                    "total_edges": len(edges),
+                    "source_identifiers": identifier_list,
+                    "species": species,
+                    "score": score
+                }
+            })
+    
+    except Exception as e:
+        logger.error(f"Error fetching STRING network data: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/network/stitch')
+def stitch_network():
+    """API endpoint to get network data from STITCH db."""
+    identifiers = request.args.get('identifiers', '')
+    species = request.args.get('species', '9606')  # Default: human
+    score = request.args.get('score', '0.4')       # Default: medium confidence
+    network_type = request.args.get('network_type', '')  # physical, functional, etc.
+    
+    # Call directly to STITCH with the appropriate parameters
+    network_url = get_stitch_network_url(identifiers, species, score, network_type)
+    
+    logger.info(f"STITCH network URL: {network_url}")
+    return jsonify({"url": network_url})
+
+@app.route('/api/network/stitch-data')
+async def stitch_network_data():
+    """API endpoint to get network data from STITCH API in Cytoscape format."""
+    identifiers = request.args.get('identifiers', '')
+    species = request.args.get('species', '9606')  # Default: human
+    score = request.args.get('score', '0.4')       # Default: medium confidence
+    network_type = request.args.get('network_type', '')  # physical, functional, etc.
+    
+    if not identifiers:
+        return jsonify({"error": "No identifiers provided"}), 400
+    
+    identifier_list = identifiers.split(',')
+    logger.info(f"STITCH network data requested for {len(identifier_list)} identifiers")
+    
+    try:
+        # Use the enhanced HTTP client to fetch data from STITCH API
+        connector = aiohttp.TCPConnector(ssl=ssl_context)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            # Fetch network data from STITCH API
+            stitch_api_url = "https://stitch.embl.de/api/json/network"
+            params = {
+                "identifiers": "\r".join(identifier_list),
+                "species": species,
+                "required_score": score
+            }
+            
+            if network_type:
+                params["network_type"] = network_type
+                
+            data = await robust_fetch(session, stitch_api_url, params)
+            
+            # Ensure data is properly parsed as JSON if it's a string
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except json.JSONDecodeError:
+                    logger.error(f"Error decoding JSON from STITCH API: {data[:100]}...")
+                    return jsonify({"error": "Invalid response from STITCH API"}), 500
+            
+            # Handle case where data is not a list
+            if not isinstance(data, list):
+                logger.error(f"Expected list from STITCH API, got {type(data)}: {str(data)[:100]}...")
+                return jsonify({"error": "Unexpected response format from STITCH API"}), 500
+            
+            # Convert to Cytoscape.js format
+            nodes = []
+            edges = []
+            seen_nodes = set()
+            
+            # Process network data
+            for item in data:
+                if not isinstance(item, dict):
+                    logger.warning(f"Skipping non-dictionary item in STITCH response: {item}")
+                    continue
+                    
+                source_id = item.get("preferredName_A") or item.get("stitchId_A", f"node_{len(seen_nodes)}")
+                target_id = item.get("preferredName_B") or item.get("stitchId_B", f"node_{len(seen_nodes)+1}")
+                score = item.get("score", 0)
+                
+                # Determine if this is a chemical or protein
+                source_type = "chemical" if isinstance(item.get("stitchId_A", ""), str) and item.get("stitchId_A", "").startswith("CID") else "protein"
+                target_type = "chemical" if isinstance(item.get("stitchId_B", ""), str) and item.get("stitchId_B", "").startswith("CID") else "protein"
+                
+                # Add source node if not seen before
+                if source_id not in seen_nodes:
+                    nodes.append({
+                        "data": {
+                            "id": source_id,
+                            "label": item.get("preferredName_A", source_id),
+                            "stitch_id": item.get("stitchId_A", ""),
+                            "type": source_type
+                        }
+                    })
+                    seen_nodes.add(source_id)
+                
+                # Add target node if not seen before
+                if target_id not in seen_nodes:
+                    nodes.append({
+                        "data": {
+                            "id": target_id,
+                            "label": item.get("preferredName_B", target_id),
+                            "stitch_id": item.get("stitchId_B", ""),
+                            "type": target_type
+                        }
+                    })
+                    seen_nodes.add(target_id)
+                
+                # Add edge
+                edges.append({
+                    "data": {
+                        "id": f"{source_id}-{target_id}",
+                        "source": source_id,
+                        "target": target_id,
+                        "weight": score,
+                        "interaction": item.get("action", "interaction")
+                    }
+                })
+            
+            return jsonify({
+                "elements": {
+                    "nodes": nodes,
+                    "edges": edges
+                },
+                "metadata": {
+                    "total_nodes": len(nodes),
+                    "total_edges": len(edges),
+                    "source_identifiers": identifier_list,
+                    "species": species,
+                    "score": score
+                }
+            })
+    
+    except Exception as e:
+        logger.error(f"Error fetching STITCH network data: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/publication-network')
+def publication_network():
+    """Render the publication network visualization page."""
+    query = request.args.get('query', '')
+    pmid = request.args.get('pmid', '')
+    
+    logger.info(f"Publication network visualization requested, PMID: {pmid}, query: {query}")
+    return render_template('publication_network.html', pmid=pmid, query=query)
+
+@app.route('/api/network/publication')
+async def publication_cocitation_network():
+    """API endpoint to get co-citation network data for publications."""
+    query = request.args.get('query', '')
+    pmid = request.args.get('pmid', '')
+    limit = int(request.args.get('limit', 30))
+    
+    if not query and not pmid:
+        return jsonify({"error": "No query or PMID provided"}), 400
+    
+    try:
+        # If we have a query but no PMID, search for PMIDs first
+        if query and not pmid:
+            logger.info(f"Searching for PMIDs with query: {query}")
+            pmids = await search_pubmed_pmids(query, limit=5)
+            if not pmids:
+                return jsonify({"error": f"No publications found for query: {query}"}), 404
+            pmid = pmids[0]  # Use the first PMID
+            logger.info(f"Using first PMID from search results: {pmid}")
+        
+        # Build the co-citation network
+        network_data = await build_cocitation_network(pmid, limit)
+        logger.info(f"Built co-citation network with {len(network_data['nodes'])} nodes and {len(network_data['edges'])} edges")
+        
+        # Validate the network data using the Pydantic model
+        try:
+            # Convert to Pydantic model and back to dict to ensure validation
+            validated_data = NetworkData(
+                source_pmid=pmid,
+                nodes=network_data["nodes"],
+                edges=network_data["edges"],
+                metadata=network_data["metadata"]
+            ).dict()
+            return jsonify(validated_data)
+        except Exception as e:
+            logger.error(f"Error validating network data: {str(e)}")
+            # Return the original data as fallback
+            return jsonify(network_data)
+    
+    except Exception as e:
+        logger.error(f"Error building co-citation network: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+async def search_pubmed_pmids(query, limit=10):
+    """Search PubMed and return a list of PMIDs."""
+    logger.info(f"Searching PubMed for: {query}")
+    
+    connector = aiohttp.TCPConnector(ssl=ssl_context)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        try:
+            data = await search_pubmed(session, query, retmax=limit)
+            if not data or 'esearchresult' not in data:
+                logger.warning(f"No results found in PubMed for query: {query}")
+                return []
+            
+            pmids = data['esearchresult'].get('idlist', [])
+            logger.info(f"Found {len(pmids)} PMIDs for query: {query}")
+            return pmids
+        except Exception as e:
+            logger.error(f"Error searching PubMed: {str(e)}")
+            return []
+
+async def get_citing_papers(pmid, limit=30):
+    """Get papers that cite the given PMID."""
+    logger.info(f"Getting papers citing PMID: {pmid}")
+    
+    pmid = str(pmid).strip()
+    citing_papers = []
+    
+    connector = aiohttp.TCPConnector(ssl=ssl_context)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        try:
+            # Use the Links API to find citing articles
+            elink_url = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi'
+            params = {
+                'dbfrom': 'pubmed',
+                'linkname': 'pubmed_pubmed_citedin',
+                'id': pmid,
+                'retmode': 'json',
+                'retmax': limit
+            }
+            
+            if NCBI_API_KEY:
+                params['api_key'] = NCBI_API_KEY
+            
+            data = await robust_fetch(session, elink_url, params)
+            
+            if isinstance(data, str):
+                # Parse JSON if it's returned as a string
+                data = json.loads(data)
+            
+            # Extract PMIDs of citing papers
+            try:
+                link_set = data.get('linksets', [{}])[0]
+                links = link_set.get('linksetdbs', [])
+                for link in links:
+                    if link.get('linkname') == 'pubmed_pubmed_citedin':
+                        citing_papers = [str(id_) for id_ in link.get('links', [])]
+                        break
+            except (IndexError, KeyError) as e:
+                logger.warning(f"Error parsing citing papers data: {str(e)}")
+            
+            logger.info(f"Found {len(citing_papers)} papers citing PMID: {pmid}")
+            return citing_papers[:limit]  # Limit the number of results
+            
+        except Exception as e:
+            logger.error(f"Error getting citing papers for PMID {pmid}: {str(e)}")
+            return []
+
+async def get_cited_papers(pmid, limit=30):
+    """Get papers that are cited by the given PMID."""
+    logger.info(f"Getting papers cited by PMID: {pmid}")
+    
+    pmid = str(pmid).strip()
+    cited_papers = []
+    
+    connector = aiohttp.TCPConnector(ssl=ssl_context)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        try:
+            # Use the Links API to find cited articles
+            elink_url = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi'
+            params = {
+                'dbfrom': 'pubmed',
+                'linkname': 'pubmed_pubmed_refs',
+                'id': pmid,
+                'retmode': 'json',
+                'retmax': limit
+            }
+            
+            if NCBI_API_KEY:
+                params['api_key'] = NCBI_API_KEY
+            
+            data = await robust_fetch(session, elink_url, params)
+            
+            if isinstance(data, str):
+                # Parse JSON if it's returned as a string
+                data = json.loads(data)
+            
+            # Extract PMIDs of cited papers
+            try:
+                link_set = data.get('linksets', [{}])[0]
+                links = link_set.get('linksetdbs', [])
+                for link in links:
+                    if link.get('linkname') == 'pubmed_pubmed_refs':
+                        cited_papers = [str(id_) for id_ in link.get('links', [])]
+                        break
+            except (IndexError, KeyError) as e:
+                logger.warning(f"Error parsing cited papers data: {str(e)}")
+            
+            logger.info(f"Found {len(cited_papers)} papers cited by PMID: {pmid}")
+            return cited_papers[:limit]  # Limit the number of results
+            
+        except Exception as e:
+            logger.error(f"Error getting cited papers for PMID {pmid}: {str(e)}")
+            return []
+
+async def get_publication_metadata(pmids):
+    """Get metadata for a list of PMIDs."""
+    if not pmids:
+        return {}
+    
+    # Ensure all PMIDs are strings
+    pmids = [str(pmid) for pmid in pmids]
+    logger.info(f"Getting metadata for {len(pmids)} PMIDs")
+    
+    # Convert list of PMIDs to comma-separated string
+    pmid_string = ','.join(pmids)
+    
+    connector = aiohttp.TCPConnector(ssl=ssl_context)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        try:
+            # Use the Summary API to get metadata
+            esummary_url = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi'
+            params = {
+                'db': 'pubmed',
+                'id': pmid_string,
+                'retmode': 'json'
+            }
+            
+            if NCBI_API_KEY:
+                params['api_key'] = NCBI_API_KEY
+            
+            data = await robust_fetch(session, esummary_url, params)
+            
+            if isinstance(data, str):
+                # Parse JSON if it's returned as a string
+                data = json.loads(data)
+            
+            # Extract metadata for each PMID
+            metadata = {}
+            
+            if not data or 'result' not in data:
+                logger.warning(f"No metadata returned for PMIDs: {pmid_string[:100]}...")
+                return metadata
+            
+            for pmid in pmids:
+                pmid = str(pmid)  # Ensure it's a string
+                try:
+                    if pmid in data['result']:
+                        paper_data = data['result'][pmid]
+                        
+                        # Extract author list
+                        authors = []
+                        for author in paper_data.get('authors', []):
+                            name = author.get('name', '')
+                            if name and name != 'et al.':
+                                authors.append(name)
+                        
+                        author_string = ', '.join(authors[:3])
+                        if len(authors) > 3:
+                            author_string += ' et al.'
+                        
+                        # Extract and format publication date
+                        pub_date = paper_data.get('pubdate', '')
+                        pub_year = ''
+                        if pub_date:
+                            # Try to extract year from various date formats
+                            year_match = re.search(r'\b(19|20)\d{2}\b', pub_date)
+                            if year_match:
+                                pub_year = year_match.group(0)
+                        
+                        # Generate a clean title
+                        title = paper_data.get('title', 'Unknown Title')
+                        title = title.strip()
+                        
+                        # Extract journal info
+                        journal = paper_data.get('source', 'Unknown Journal')
+                        
+                        metadata[pmid] = {
+                            'title': title,
+                            'authors': author_string,
+                            'year': pub_year,
+                            'journal': journal
+                        }
+                    else:
+                        # Create placeholder entry for missing PMIDs
+                        logger.warning(f"No metadata found for PMID {pmid} in the API response")
+                        metadata[pmid] = {
+                            'title': f"Paper {pmid}",
+                            'authors': 'Unknown Authors',
+                            'year': '',
+                            'journal': 'Unknown Journal'
+                        }
+                except Exception as e:
+                    logger.error(f"Error extracting metadata for PMID {pmid}: {str(e)}")
+                    # Create a placeholder for failed entries
+                    metadata[pmid] = {
+                        'title': f"Paper {pmid}",
+                        'authors': 'Unknown Authors',
+                        'year': '',
+                        'journal': 'Unknown Journal'
+                    }
+            
+            logger.info(f"Retrieved metadata for {len(metadata)} PMIDs")
+            return metadata
+            
+        except Exception as e:
+            logger.error(f"Error getting metadata for PMIDs: {str(e)}")
+            # Create placeholder entries for all PMIDs
+            return {pmid: {
+                'title': f"Paper {pmid}",
+                'authors': 'Unknown Authors',
+                'year': '',
+                'journal': 'Unknown Journal'
+            } for pmid in pmids}
+
+async def build_cocitation_network(pmid, limit=30):
+    """Build a co-citation network for a publication."""
+    pmid = str(pmid)
+    logger.info(f"Building co-citation network for PMID: {pmid}")
+    
+    # Fetch citing and cited papers concurrently
+    citing_papers_task = get_citing_papers(pmid, limit=limit)
+    cited_papers_task = get_cited_papers(pmid, limit=limit)
+    
+    citing_papers, cited_papers = await asyncio.gather(citing_papers_task, cited_papers_task)
+    
+    logger.info(f"Found {len(cited_papers)} cited and {len(citing_papers)} citing papers for PMID: {pmid}")
+    
+    # Gather all unique PMIDs
+    all_pmids = set([pmid])  # Start with the source PMID
+    all_pmids.update([str(p) for p in citing_papers])
+    all_pmids.update([str(p) for p in cited_papers])
+    
+    # Find secondary connections (citations between citing and cited papers)
+    secondary_connections = []
+    secondary_papers = set()
+    
+    # For up to 3 citing papers, find who they cite (besides the source)
+    limit_for_secondary = min(3, len(citing_papers))
+    if limit_for_secondary > 0:
+        # Get papers cited by the first few citing papers
+        secondary_cited_tasks = []
+        for i in range(limit_for_secondary):
+            if i < len(citing_papers):
+                secondary_cited_tasks.append(get_cited_papers(citing_papers[i], limit=10))
+        
+        secondary_cited_results = await asyncio.gather(*secondary_cited_tasks)
+        
+        # Process secondary cited papers
+        for citing_idx, cited_list in enumerate(secondary_cited_results):
+            if citing_idx < len(citing_papers):
+                citing_pmid = citing_papers[citing_idx]
+                for cited_pmid in cited_list:
+                    # Don't include the original paper as a secondary connection
+                    if str(cited_pmid) != pmid:
+                        secondary_connections.append({
+                            'source': str(citing_pmid),
+                            'target': str(cited_pmid),
+                            'type': 'cites'
+                        })
+                        secondary_papers.add(str(cited_pmid))
+    
+    # Add secondary papers to all_pmids
+    all_pmids.update(secondary_papers)
+    
+    # For up to 3 cited papers, find who cites them (besides the source)
+    limit_for_secondary = min(3, len(cited_papers))
+    if limit_for_secondary > 0:
+        # Get papers that cite the first few cited papers
+        secondary_citing_tasks = []
+        for i in range(limit_for_secondary):
+            if i < len(cited_papers):
+                secondary_citing_tasks.append(get_citing_papers(cited_papers[i], limit=10))
+        
+        secondary_citing_results = await asyncio.gather(*secondary_citing_tasks)
+        
+        # Process secondary citing papers
+        for cited_idx, citing_list in enumerate(secondary_citing_results):
+            if cited_idx < len(cited_papers):
+                cited_pmid = cited_papers[cited_idx]
+                for citing_pmid in citing_list:
+                    # Don't include the original paper as a secondary connection
+                    if str(citing_pmid) != pmid:
+                        secondary_connections.append({
+                            'source': str(citing_pmid),
+                            'target': str(cited_pmid),
+                            'type': 'cites'
+                        })
+                        secondary_papers.add(str(citing_pmid))
+    
+    # Add secondary papers to all_pmids
+    all_pmids.update(secondary_papers)
+    
+    # Fetch metadata for all PMIDs
+    metadata = await get_publication_metadata(list(all_pmids))
+    
+    # Build nodes and edges for the network
+    nodes = []
+    edges = []
+    
+    # Add the source node
+    source_metadata = metadata.get(pmid, {
+        'title': f"Paper {pmid}",
+        'authors': 'Unknown Authors',
+        'year': '',
+        'journal': 'Unknown Journal'
+    })
+    
+    nodes.append({
+        'id': pmid,
+        'label': source_metadata.get('title', f"Paper {pmid}"),
+        'authors': source_metadata.get('authors', 'Unknown Authors'),
+        'year': source_metadata.get('year', ''),
+        'journal': source_metadata.get('journal', 'Unknown Journal'),
+        'type': 'source'
+    })
+    
+    # Add citing paper nodes and edges
+    for citing_pmid in citing_papers:
+        citing_pmid = str(citing_pmid)
+        citing_metadata = metadata.get(citing_pmid, {
+            'title': f"Paper {citing_pmid}",
+            'authors': 'Unknown Authors',
+            'year': '',
+            'journal': 'Unknown Journal'
+        })
+        
+        nodes.append({
+            'id': citing_pmid,
+            'label': citing_metadata.get('title', f"Paper {citing_pmid}"),
+            'authors': citing_metadata.get('authors', 'Unknown Authors'),
+            'year': citing_metadata.get('year', ''),
+            'journal': citing_metadata.get('journal', 'Unknown Journal'),
+            'type': 'citing'
+        })
+        
+        edges.append({
+            'source': citing_pmid,
+            'target': pmid,
+            'type': 'cites'
+        })
+    
+    # Add cited paper nodes and edges
+    for cited_pmid in cited_papers:
+        cited_pmid = str(cited_pmid)
+        cited_metadata = metadata.get(cited_pmid, {
+            'title': f"Paper {cited_pmid}",
+            'authors': 'Unknown Authors',
+            'year': '',
+            'journal': 'Unknown Journal'
+        })
+        
+        nodes.append({
+            'id': cited_pmid,
+            'label': cited_metadata.get('title', f"Paper {cited_pmid}"),
+            'authors': cited_metadata.get('authors', 'Unknown Authors'),
+            'year': cited_metadata.get('year', ''),
+            'journal': cited_metadata.get('journal', 'Unknown Journal'),
+            'type': 'cited'
+        })
+        
+        edges.append({
+            'source': pmid,
+            'target': cited_pmid,
+            'type': 'cites'
+        })
+    
+    # Add secondary papers (if not already in the network)
+    existing_node_ids = set(node['id'] for node in nodes)
+    for pmid_sec in secondary_papers:
+        pmid_sec = str(pmid_sec)
+        if pmid_sec not in existing_node_ids:
+            sec_metadata = metadata.get(pmid_sec, {
+                'title': f"Paper {pmid_sec}",
+                'authors': 'Unknown Authors',
+                'year': '',
+                'journal': 'Unknown Journal'
+            })
+            
+            nodes.append({
+                'id': pmid_sec,
+                'label': sec_metadata.get('title', f"Paper {pmid_sec}"),
+                'authors': sec_metadata.get('authors', 'Unknown Authors'),
+                'year': sec_metadata.get('year', ''),
+                'journal': sec_metadata.get('journal', 'Unknown Journal'),
+                'type': 'secondary'
+            })
+            existing_node_ids.add(pmid_sec)
+    
+    # Add secondary connection edges
+    for conn in secondary_connections:
+        edges.append({
+            'source': conn['source'],
+            'target': conn['target'],
+            'type': 'secondary'
+        })
+    
+    # Add co-citation relationships
+    cocitation_edges = []
+    
+    # For each pair of cited papers, add a co-citation edge
+    cited_list = list(cited_papers)
+    for i in range(len(cited_list)):
+        for j in range(i + 1, len(cited_list)):
+            source_id = str(cited_list[i])
+            target_id = str(cited_list[j])
+            
+            cocitation_edges.append({
+                'source': source_id,
+                'target': target_id,
+                'type': 'cocitation',
+                'weight': 1  # Could be weighted by number of shared citations
+            })
+    
+    # Add co-citation edges to the main edges list
+    edges.extend(cocitation_edges)
+    
+    # Prepare metadata for the response
+    network_metadata = {
+        'source_title': source_metadata.get('title', f"Paper {pmid}"),
+        'citing_count': len(citing_papers),
+        'cited_count': len(cited_papers),
+        'secondary_count': len(secondary_papers),
+        'total_nodes': len(nodes),
+        'total_edges': len(edges),
+        'cocitation_edges': len(cocitation_edges)
+    }
+    
+    logger.info(f"Built network with {len(nodes)} nodes and {len(edges)} edges")
+    
+    return {
+        'source_pmid': pmid,
+        'nodes': nodes,
+        'edges': edges,
+        'metadata': network_metadata
+    }
+
 @app.errorhandler(404)
 def page_not_found(e):
     """Handle 404 errors."""
@@ -445,7 +1278,7 @@ def init_cache_command():
 # Replace before_first_request (removed in Flask 2.x) with a new approach
 # Using 'with app.app_context()' pattern for initialization
 def initialize_app():
-    """ Initialize application components."""
+    """Initialize application components."""
     # Initialize cache asynchronously
     try:
         asyncio.run(cache.initialize_async())
@@ -454,7 +1287,19 @@ def initialize_app():
         app.logger.error(f"Cache initialization failed: {str(e)}")
 
 # Register the function to run when the application starts
-if __name__ == "__main__":
-    import os
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+if __name__ == '__main__':
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='BioSearch Web Application')
+    parser.add_argument('--port', type=int, default=5000, help='Port to run the server on')
+    parser.add_argument('--debug', action='store_true', help='Run in debug mode')
+    args = parser.parse_args()
+    
+    # Initialize app components
+    initialize_app()
+    
+    # Use parsed arguments with fallback to environment variables
+    port = args.port or int(os.environ.get('PORT', 5000))
+    debug = args.debug or os.environ.get('FLASK_DEBUG', 'true').lower() in ('true', '1', 't')
+    
+    print(f"Starting server on port {port}, debug mode: {debug}")
+    app.run(host='0.0.0.0', port=port, debug=debug) 

@@ -91,6 +91,9 @@
             <div class="d-flex justify-content-between align-items-center mb-3">
                 <h2><i class="fas fa-list-ul me-2 text-primary"></i>Search Results</h2>
                 <div>
+                    <button id="network-btn" class="btn btn-outline-primary me-2">
+                        <i class="fas fa-project-diagram"></i> View Network
+                    </button>
                     <button id="export-btn" class="btn btn-outline-primary">
                         <i class="fas fa-download"></i> Export Results
                     </button>
@@ -240,5 +243,60 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+    
+    <script>
+    // Add network visualization functionality
+    document.getElementById('network-btn').addEventListener('click', function() {
+        const selectedIds = [];
+        
+        // Collect selected identifiers from checkbox results
+        document.querySelectorAll('.result-checkbox:checked').forEach(checkbox => {
+            selectedIds.push(checkbox.value);
+        });
+        
+        if (selectedIds.length === 0) {
+            alert('Please select at least one result to visualize.');
+            return;
+        }
+        
+        // Determine network type based on selected database
+        const activeTabId = document.querySelector('.nav-link.active').id;
+        const networkType = activeTabId.includes('drugbank') ? 'stitch' : 'string';
+        
+        // Redirect to network viewer
+        const networkUrl = `/network?identifiers=${selectedIds.join(',')}&type=${networkType}`;
+        window.location.href = networkUrl;
+    });
+    </script>
+
+    <!-- Publication result template -->
+    <template id="publication-result-template">
+      <div class="result-item card mb-3">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-start">
+            <h3 class="card-title">{{title}}</h3>
+            <span class="badge rounded-pill {{badge_class}}">{{source_db}}</span>
+          </div>
+          <p class="card-text mb-1">{{authors}}</p>
+          <p class="card-text mb-2"><small class="text-muted">{{journal}} {{year}}</small></p>
+          <div class="mb-2">
+            <strong>PMID:</strong> <a href="https://pubmed.ncbi.nlm.nih.gov/{{id}}" target="_blank">{{id}}</a>
+          </div>
+          <p class="card-text">{{abstract}}</p>
+          <div class="mt-2 mb-1">
+            <div class="form-check form-check-inline">
+              <input class="form-check-input result-select" type="checkbox" id="select-{{id}}" value="{{id}}" data-id="{{id}}" data-type="publication">
+              <label class="form-check-label" for="select-{{id}}">Select</label>
+            </div>
+            <a href="https://pubmed.ncbi.nlm.nih.gov/{{id}}" target="_blank" class="btn btn-sm btn-outline-primary">
+              <i class="fas fa-external-link-alt"></i> PubMed
+            </a>
+            <a href="/publication-network?pmid={{id}}" class="btn btn-sm btn-outline-info">
+              <i class="fas fa-project-diagram"></i> View Citation Network
+            </a>
+          </div>
+        </div>
+      </div>
+    </template>
 </body>
 </html> 
