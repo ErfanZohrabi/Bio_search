@@ -11,7 +11,8 @@ networkx==3.1
 matplotlib==3.7.2
 chembl-webresource-client==0.10.8
 xmltodict==0.13.0
-aioredis==2.0.1
+# Removing aioredis to avoid compatibility issues with Python 3.11
+# aioredis==2.0.1
 pymongo==4.5.0
 pydantic==2.0.3
 tqdm==4.66.1

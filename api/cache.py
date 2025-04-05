@@ -22,7 +22,6 @@ logger = logging.getLogger(__name__)
 # Try to import Redis dependencies
 try:
     import redis
-    import aioredis
     REDIS_AVAILABLE = True
 except ImportError:
     logger.warning("Redis dependencies not installed. Using in-memory cache as fallback.")
@@ -32,9 +31,23 @@ except ImportError:
 CACHE_TTL = int(os.getenv('CACHE_TTL', 3600))  # 1 hour default
 CACHE_PREFIX = "biosearch:"
 CACHE_ENABLED = os.getenv('CACHE_ENABLED', 'true').lower() in ('true', '1', 't', 'yes')
+# Explicitly disable aioredis in Render.com environment or when Redis is not available
+USE_AIOREDIS = os.getenv('USE_AIOREDIS', 'false').lower() in ('true', '1', 't', 'yes') and REDIS_AVAILABLE
 
 # In-memory cache as fallback
 _memory_cache: Dict[str, Tuple[Any, float]] = {}
+
+# Only import aioredis if explicitly enabled to avoid the TimeoutError conflict in Python 3.11
+if USE_AIOREDIS:
+    try:
+        import aioredis
+        AIOREDIS_AVAILABLE = True
+    except (ImportError, TypeError) as e:
+        logger.warning(f"aioredis import error: {str(e)}. Using in-memory cache for async operations.")
+        AIOREDIS_AVAILABLE = False
+else:
+    AIOREDIS_AVAILABLE = False
+    logger.warning("aioredis explicitly disabled. Using in-memory cache for async operations.")
 
 class Cache:
     """Redis cache client wrapper."""
@@ -64,7 +77,7 @@ class Cache:
         
     async def initialize_async(self):
         """Initialize the async Redis client."""
-        if REDIS_AVAILABLE and self.enabled and not self._aioredis:
+        if AIOREDIS_AVAILABLE and self.enabled and not self._aioredis:
             try:
                 # Initialize asynchronous Redis client
                 self._aioredis = await aioredis.from_url(self.url)
