@@ -19,7 +19,10 @@
                         </div>
                         <div class="col-md-3">
                             <label for="pmidInput" class="form-label">PMID</label>
-                            <input type="text" class="form-control" id="pmidInput" placeholder="Enter PMID..." value="{{ pmid }}">
+                            <input type="text" class="form-control" id="pmidInput" placeholder="e.g. 12345678 (numeric)" 
+                                   title="PubMed ID - numeric identifiers only (e.g., 12345678). For protein identifiers like P04637, use the search field instead."
+                                   value="{{ pmid }}">
+                            <div class="form-text small">Numeric PMID only (e.g. 12345678)</div>
                         </div>
                         <div class="col-md-3">
                             <label for="limitInput" class="form-label">Node Limit</label>
@@ -251,6 +254,12 @@ document.addEventListener('DOMContentLoaded', function() {
         // Validate input
         if (!query && !pmid) {
             showError('Please enter a search query or PMID.');
+            return;
+        }
+        
+        // Validate PMID format (should be numeric)
+        if (pmid && !/^\d+$/.test(pmid)) {
+            showError('Invalid PMID format. PMIDs are numeric identifiers (e.g., 12345678). For protein identifiers like P04637, please use the search query field instead.');
             return;
         }
         

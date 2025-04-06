@@ -236,7 +236,13 @@ document.addEventListener('DOMContentLoaded', function() {
             .then(response => {
                 if (!response.ok) {
                     return response.json().then(data => {
-                        throw new Error(data.error || 'Failed to fetch network data');
+                        throw new Error(data.error || `Request failed with status ${response.status}`);
+                    }).catch(e => {
+                        // If JSON parsing fails, use the status text
+                        if (e instanceof SyntaxError) {
+                            throw new Error(`Request failed with status ${response.status}: ${response.statusText}`);
+                        }
+                        throw e;
                     });
                 }
                 return response.json();
@@ -256,6 +262,7 @@ document.addEventListener('DOMContentLoaded', function() {
             })
             .catch(error => {
                 loadingIndicator.style.display = 'none';
+                console.error('Network error:', error);
                 showError(error.message);
             });
     }
@@ -528,9 +535,25 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     function showError(message) {
-        networkError.textContent = message;
+        networkError.innerHTML = message;
         networkError.style.display = 'block';
-        loadingIndicator.style.display = 'none';
+        
+        // Add help message for certain errors
+        if (message.includes('did not match the expected pattern') || 
+            message.includes('No protein interactions found')) {
+            const helpMessage = document.createElement('div');
+            helpMessage.className = 'mt-3';
+            helpMessage.innerHTML = `
+                <h6>Troubleshooting tips:</h6>
+                <ul>
+                    <li>Make sure you're using official UniProt identifiers (e.g., P04637) or gene symbols (e.g., TP53)</li>
+                    <li>Try selecting a different species if you're using gene symbols</li>
+                    <li>For human proteins, UniProt IDs typically start with 'P', 'Q', or 'O' followed by numbers</li>
+                    <li>Check that the protein exists in the selected species</li>
+                </ul>
+            `;
+            networkError.appendChild(helpMessage);
+        }
     }
 });
 </script>

@@ -546,20 +546,34 @@ async def string_network_data():
     logger.info(f"STRING network data requested for {len(identifier_list)} identifiers")
     
     try:
+        # Clean and validate identifiers
+        cleaned_identifiers = []
+        for identifier in identifier_list:
+            # Remove any whitespace and special characters except for dots and dashes
+            cleaned = identifier.strip()
+            if cleaned:
+                cleaned_identifiers.append(cleaned)
+        
+        if not cleaned_identifiers:
+            return jsonify({"error": "No valid identifiers provided after cleaning"}), 400
+            
+        logger.info(f"Cleaned identifiers: {cleaned_identifiers}")
+        
         # Use the enhanced HTTP client to fetch data from STRING API
         connector = aiohttp.TCPConnector(ssl=ssl_context)
         async with aiohttp.ClientSession(connector=connector) as session:
             # Fetch network data from STRING API
             string_api_url = "https://string-db.org/api/json/network"
             params = {
-                "identifiers": "\r".join(identifier_list),
+                "identifiers": "%0d".join(cleaned_identifiers),  # STRING API requires %0d separator
                 "species": species,
                 "required_score": score
             }
             
             if network_type:
                 params["network_type"] = network_type
-                
+            
+            logger.info(f"STRING API request parameters: {params}")    
             data = await robust_fetch(session, string_api_url, params)
             
             # Ensure data is properly parsed as JSON if it's a string
@@ -572,6 +586,12 @@ async def string_network_data():
             
             # Handle case where data is not a list
             if not isinstance(data, list):
+                # Check if it's an error message from STRING API
+                if isinstance(data, dict) and "error" in data:
+                    error_msg = data.get("error", "Unknown STRING API error")
+                    logger.error(f"STRING API returned error: {error_msg}")
+                    return jsonify({"error": f"STRING API error: {error_msg}"}), 400
+                
                 logger.error(f"Expected list from STRING API, got {type(data)}: {str(data)[:100]}...")
                 return jsonify({"error": "Unexpected response format from STRING API"}), 500
                 
@@ -625,6 +645,11 @@ async def string_network_data():
                     }
                 })
             
+            # If we have no nodes/edges but didn't get an error from STRING
+            if not nodes:
+                logger.warning(f"STRING API returned no nodes for identifiers: {cleaned_identifiers}")
+                return jsonify({"error": "No protein interactions found. Try using official UniProt or STRING identifiers."}), 404
+            
             return jsonify({
                 "elements": {
                     "nodes": nodes,
@@ -633,14 +658,14 @@ async def string_network_data():
                 "metadata": {
                     "total_nodes": len(nodes),
                     "total_edges": len(edges),
-                    "source_identifiers": identifier_list,
+                    "source_identifiers": cleaned_identifiers,
                     "species": species,
                     "score": score
                 }
             })
     
     except Exception as e:
-        logger.error(f"Error fetching STRING network data: {str(e)}")
+        logger.error(f"Error fetching STRING network data: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/network/stitch')
@@ -792,6 +817,11 @@ async def publication_cocitation_network():
     if not query and not pmid:
         logger.warning("API request missing both query and PMID")
         return jsonify({"error": "No query or PMID provided"}), 400
+    
+    # Validate PMID format if provided
+    if pmid and not pmid.isdigit():
+        logger.warning(f"Invalid PMID format: {pmid}")
+        return jsonify({"error": "Invalid PMID format. PMIDs must be numeric identifiers."}), 400
     
     try:
         logger.info(f"Publication network requested - PMID: '{pmid}', Query: '{query}', Limit: {limit}")

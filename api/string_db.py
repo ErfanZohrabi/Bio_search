@@ -24,36 +24,55 @@ SPECIES_CODES = {
     "auto-detect": "auto"
 }
 
-async def get_network_url(
-    identifiers: List[str],
-    species: str = "human",
-    network_type: str = "full",
-    required_score: float = 0.4
-) -> str:
-    """
-    Generate a STRING network visualization URL.
+def get_network_url(
+    identifiers,
+    species="9606",
+    score="0.4",
+    network_type=""
+):
+    """Generate a URL for the STRING network viewer.
     
     Args:
-        identifiers: List of protein/gene identifiers
-        species: Species name or code (default: "human")
-        network_type: Type of network ("full" or "physical")
-        required_score: Minimum interaction score (0.15-0.9)
-    
+        identifiers (str): Comma-separated list of protein identifiers
+        species (str): Species ID (default: 9606 for human)
+        score (str): Minimum required interaction score (default: "0.4")
+        network_type (str): Type of network (e.g., "physical")
+        
     Returns:
-        URL for the STRING network visualization
+        str: URL for the STRING network viewer
     """
-    species_code = SPECIES_CODES.get(species.lower(), "9606")
-    identifiers_str = "%0D".join(identifiers)
+    # Process the identifiers - make sure they're properly formatted
+    if isinstance(identifiers, list):
+        # If it's a list, join with the proper delimiter
+        identifiers_str = "%0d".join([id.strip() for id in identifiers if id.strip()])
+    elif isinstance(identifiers, str):
+        # If it's a comma-separated string, split and rejoin with the proper delimiter
+        identifiers_str = "%0d".join([id.strip() for id in identifiers.split(',') if id.strip()])
+    else:
+        # Default fallback
+        identifiers_str = str(identifiers)
     
-    params = {
+    # Create the network URL
+    base_url = "https://string-db.org/cgi/network.pl"
+    network_params = {
         "identifiers": identifiers_str,
-        "species": species_code,
-        "network_type": network_type,
-        "required_score": str(required_score)
+        "species": species,
+        "required_score": score
     }
     
-    query_string = "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
-    return f"{STRING_NETWORK_URL}?{query_string}"
+    if network_type:
+        network_params["network_type"] = network_type
+    
+    # Build the query string
+    query_parts = []
+    for key, value in network_params.items():
+        query_parts.append(f"{key}={value}")
+    
+    query_string = "&".join(query_parts)
+    network_url = f"{base_url}?{query_string}"
+    
+    logger.info(f"Generated STRING network URL: {network_url}")
+    return network_url
 
 async def search_string(
     session: aiohttp.ClientSession,
