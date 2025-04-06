@@ -825,11 +825,14 @@ async def publication_cocitation_network():
                     nodes=network_data["nodes"],
                     edges=network_data["edges"],
                     metadata=network_data["metadata"]
-                ).dict()
+                ).model_dump()
+                
+                logger.info(f"Returning validated network data with {len(validated_data['nodes'])} nodes and {len(validated_data['edges'])} edges")
                 return jsonify(validated_data)
             except Exception as e:
-                logger.error(f"Error validating network data: {str(e)}")
-                # Return the original data as fallback
+                logger.error(f"Error validating network data: {str(e)}", exc_info=True)
+                # Return the original data as fallback with a warning message
+                network_data["metadata"]["validation_warning"] = f"Data validation failed: {str(e)}"
                 return jsonify(network_data)
         except Exception as e:
             logger.error(f"Error in build_cocitation_network: {str(e)}", exc_info=True)
@@ -1338,9 +1341,9 @@ def page_not_found(e):
 
 @app.errorhandler(500)
 def server_error(e):
-    """Handle 500 errors."""
-    logger.error(f"Server error: {str(e)}")
-    return render_template('500.html'), 500
+    """Handle server errors."""
+    logger.error(f"Server error: {str(e)}", exc_info=True)
+    return render_template('500.html', error=str(e)), 500
 
 @app.cli.command("init-cache")
 def init_cache_command():

@@ -270,7 +270,23 @@ document.addEventListener('DOMContentLoaded', function() {
         fetch(apiUrl)
             .then(response => {
                 if (!response.ok) {
-                    throw new Error(`Network request failed with status ${response.status}`);
+                    if (response.status === 500) {
+                        console.error('Server error (500) detected');
+                        return response.json().then(errorData => {
+                            throw new Error(`Server error: ${errorData.error || "Unknown server error"}`);
+                        }).catch(e => {
+                            // If parsing JSON fails, use the status text
+                            throw new Error(`Network request failed with status 500: ${response.statusText}`);
+                        });
+                    } else {
+                        // For other errors, try to parse the response as JSON
+                        return response.json().then(errorData => {
+                            throw new Error(`${errorData.error || `Network request failed with status ${response.status}`}`);
+                        }).catch(e => {
+                            // If parsing JSON fails, use a generic error message
+                            throw new Error(`Network request failed with status ${response.status}`);
+                        });
+                    }
                 }
                 return response.json();
             })
@@ -288,6 +304,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 networkContainer.style.display = 'block';
                 controlsContainer.style.display = 'block';
                 document.querySelector('.network-legend').style.display = 'block';
+                
+                // Check for validation warnings
+                if (data.metadata && data.metadata.validation_warning) {
+                    showWarning(data.metadata.validation_warning);
+                }
                 
                 // Display network info
                 displayNetworkInfo(data);
@@ -674,6 +695,23 @@ document.addEventListener('DOMContentLoaded', function() {
     
     function capitalizeFirstLetter(string) {
         return string.charAt(0).toUpperCase() + string.slice(1);
+    }
+    
+    // Helper function to show warnings (non-critical errors)
+    function showWarning(message) {
+        const warningContainer = document.createElement('div');
+        warningContainer.className = 'alert alert-warning alert-dismissible fade show mt-3';
+        warningContainer.innerHTML = `
+            <strong>Warning:</strong> ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        `;
+        networkContainer.parentNode.insertBefore(warningContainer, networkContainer);
+        
+        // Auto-dismiss after 10 seconds
+        setTimeout(() => {
+            warningContainer.classList.remove('show');
+            setTimeout(() => warningContainer.remove(), 500);
+        }, 10000);
     }
 });
 </script>

@@ -33,6 +33,12 @@
                     <h2 class="mb-4">Server Error</h2>
                     <p class="lead mb-4">Oops! Something went wrong on our end.</p>
                     <p class="mb-5">It seems our laboratory experiment had an unexpected reaction. Our team has been notified and is working on a solution.</p>
+                    {% if error %}
+                    <div class="alert alert-danger mb-4">
+                        <h5 class="mb-2">Error details:</h5>
+                        <p class="mb-0">{{ error }}</p>
+                    </div>
+                    {% endif %}
                     <a href="{{ url_for('home') }}" class="btn btn-primary btn-lg">
                         <i class="fas fa-home me-2"></i>Return to Homepage
                     </a>
