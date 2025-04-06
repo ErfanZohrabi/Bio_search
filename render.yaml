@@ -2,7 +2,13 @@ services:
   - type: web
     name: biosearch
     env: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: |
+      pip install -r requirements.txt
+      # Ensure static directories exist and have proper permissions
+      mkdir -p static/js
+      mkdir -p static/css
+      mkdir -p static/img
+      chmod -R 755 static
     startCommand: gunicorn wsgi:app
     plan: free
     envVars:
@@ -14,6 +20,8 @@ services:
         value: production
       - key: PYTHONUNBUFFERED
         value: "true"
+      - key: RENDER_EXTERNAL_URL
+        sync: false
     healthCheckPath: /
     autoDeploy: true
     disk:

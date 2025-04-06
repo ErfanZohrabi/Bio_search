@@ -52,6 +52,18 @@ else:
 
 app = Flask(__name__)
 
+# Configure static URL path for production environments
+app.static_url_path = '/static'
+app.static_folder = 'static'
+
+# Setup CORS to allow requests from any origin
+@app.after_request
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
+    response.headers['Access-Control-Allow-Methods'] = 'GET,POST,OPTIONS'
+    return response
+
 # Define Pydantic models for data validation
 class PublicationNode(BaseModel):
     id: str  # PMID
