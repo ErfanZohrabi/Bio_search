@@ -69,9 +69,16 @@ class NetworkEdge(BaseModel):
     
 class NetworkData(BaseModel):
     source_pmid: str
-    nodes: List[Dict[str, Any]]
-    edges: List[Dict[str, Any]]
-    metadata: Dict[str, Any]
+    nodes: List[Dict[str, Any]] = []
+    edges: List[Dict[str, Any]] = []
+    metadata: Dict[str, Any] = {}
+    
+    class Config:
+        # Allow extra fields
+        extra = "allow"
+        # Make the model more forgiving of missing data
+        validate_assignment = True
+        arbitrary_types_allowed = True
 
 # Enhanced HTTP client with retry logic
 @retry(
@@ -79,11 +86,12 @@ class NetworkData(BaseModel):
     wait=wait_exponential(multiplier=1, min=2, max=10),
     retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError))
 )
-async def robust_fetch(session, url, params=None, timeout=30.0):
+async def robust_fetch(session, url, params=None, timeout=60.0):
     """
     Enhanced HTTP client with retry logic and better error handling
     """
     try:
+        logger.info(f"Fetching URL: {url} with params: {params}")
         async with session.get(url, params=params, timeout=timeout) as response:
             if response.status == 429:  # Rate limit
                 logger.warning(f"Rate limit hit for {url}. Retrying...")
@@ -97,10 +105,17 @@ async def robust_fetch(session, url, params=None, timeout=30.0):
             response.raise_for_status()  # Raise exception for 4xx/5xx errors
             
             # Decide whether to return json or text based on content type
-            if 'application/json' in response.headers.get('Content-Type', ''):
-                return await response.json()
+            content_type = response.headers.get('Content-Type', '')
+            logger.debug(f"Response content type: {content_type}")
+            
+            if 'application/json' in content_type:
+                result = await response.json()
+                logger.debug(f"JSON response successfully parsed")
+                return result
             else:
-                return await response.text()
+                result = await response.text()
+                logger.debug(f"Text response received, length: {len(result)}")
+                return result
                 
     except asyncio.TimeoutError:
         logger.error(f"Timeout error fetching {url}")
@@ -775,40 +790,54 @@ async def publication_cocitation_network():
     limit = int(request.args.get('limit', 30))
     
     if not query and not pmid:
+        logger.warning("API request missing both query and PMID")
         return jsonify({"error": "No query or PMID provided"}), 400
     
     try:
+        logger.info(f"Publication network requested - PMID: '{pmid}', Query: '{query}', Limit: {limit}")
+        
         # If we have a query but no PMID, search for PMIDs first
         if query and not pmid:
             logger.info(f"Searching for PMIDs with query: {query}")
             pmids = await search_pubmed_pmids(query, limit=5)
             if not pmids:
+                logger.warning(f"No publications found for query: {query}")
                 return jsonify({"error": f"No publications found for query: {query}"}), 404
             pmid = pmids[0]  # Use the first PMID
             logger.info(f"Using first PMID from search results: {pmid}")
         
         # Build the co-citation network
-        network_data = await build_cocitation_network(pmid, limit)
-        logger.info(f"Built co-citation network with {len(network_data['nodes'])} nodes and {len(network_data['edges'])} edges")
-        
-        # Validate the network data using the Pydantic model
         try:
-            # Convert to Pydantic model and back to dict to ensure validation
-            validated_data = NetworkData(
-                source_pmid=pmid,
-                nodes=network_data["nodes"],
-                edges=network_data["edges"],
-                metadata=network_data["metadata"]
-            ).dict()
-            return jsonify(validated_data)
+            # Set a higher timeout for network building operations
+            network_data = await build_cocitation_network(pmid, limit)
+            logger.info(f"Built co-citation network with {len(network_data.get('nodes', []))} nodes and {len(network_data.get('edges', []))} edges")
+            
+            # Ensure we have valid data structure
+            if not network_data.get('nodes') or not network_data.get('edges'):
+                logger.warning(f"Network data missing nodes or edges for PMID: {pmid}")
+                return jsonify({"error": "Could not generate network data - insufficient citation information"}), 404
+                
+            # Validate the network data using the Pydantic model
+            try:
+                # Convert to Pydantic model and back to dict to ensure validation
+                validated_data = NetworkData(
+                    source_pmid=pmid,
+                    nodes=network_data["nodes"],
+                    edges=network_data["edges"],
+                    metadata=network_data["metadata"]
+                ).dict()
+                return jsonify(validated_data)
+            except Exception as e:
+                logger.error(f"Error validating network data: {str(e)}")
+                # Return the original data as fallback
+                return jsonify(network_data)
         except Exception as e:
-            logger.error(f"Error validating network data: {str(e)}")
-            # Return the original data as fallback
-            return jsonify(network_data)
+            logger.error(f"Error in build_cocitation_network: {str(e)}", exc_info=True)
+            return jsonify({"error": f"Network generation error: {str(e)}"}), 500
     
     except Exception as e:
-        logger.error(f"Error building co-citation network: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Unexpected error in publication network endpoint: {str(e)}", exc_info=True)
+        return jsonify({"error": f"Server error: {str(e)}"}), 500
 
 async def search_pubmed_pmids(query, limit=10):
     """Search PubMed and return a list of PMIDs."""
@@ -1038,222 +1067,269 @@ async def build_cocitation_network(pmid, limit=30):
     pmid = str(pmid)
     logger.info(f"Building co-citation network for PMID: {pmid}")
     
-    # Fetch citing and cited papers concurrently
-    citing_papers_task = get_citing_papers(pmid, limit=limit)
-    cited_papers_task = get_cited_papers(pmid, limit=limit)
-    
-    citing_papers, cited_papers = await asyncio.gather(citing_papers_task, cited_papers_task)
-    
-    logger.info(f"Found {len(cited_papers)} cited and {len(citing_papers)} citing papers for PMID: {pmid}")
-    
-    # Gather all unique PMIDs
-    all_pmids = set([pmid])  # Start with the source PMID
-    all_pmids.update([str(p) for p in citing_papers])
-    all_pmids.update([str(p) for p in cited_papers])
-    
-    # Find secondary connections (citations between citing and cited papers)
-    secondary_connections = []
-    secondary_papers = set()
-    
-    # For up to 3 citing papers, find who they cite (besides the source)
-    limit_for_secondary = min(3, len(citing_papers))
-    if limit_for_secondary > 0:
-        # Get papers cited by the first few citing papers
-        secondary_cited_tasks = []
-        for i in range(limit_for_secondary):
-            if i < len(citing_papers):
-                secondary_cited_tasks.append(get_cited_papers(citing_papers[i], limit=10))
+    try:
+        # Fetch citing and cited papers concurrently
+        citing_papers_task = get_citing_papers(pmid, limit=limit)
+        cited_papers_task = get_cited_papers(pmid, limit=limit)
         
-        secondary_cited_results = await asyncio.gather(*secondary_cited_tasks)
+        citing_papers, cited_papers = await asyncio.gather(citing_papers_task, cited_papers_task)
         
-        # Process secondary cited papers
-        for citing_idx, cited_list in enumerate(secondary_cited_results):
-            if citing_idx < len(citing_papers):
-                citing_pmid = citing_papers[citing_idx]
-                for cited_pmid in cited_list:
-                    # Don't include the original paper as a secondary connection
-                    if str(cited_pmid) != pmid:
-                        secondary_connections.append({
-                            'source': str(citing_pmid),
-                            'target': str(cited_pmid),
-                            'type': 'cites'
-                        })
-                        secondary_papers.add(str(cited_pmid))
-    
-    # Add secondary papers to all_pmids
-    all_pmids.update(secondary_papers)
-    
-    # For up to 3 cited papers, find who cites them (besides the source)
-    limit_for_secondary = min(3, len(cited_papers))
-    if limit_for_secondary > 0:
-        # Get papers that cite the first few cited papers
-        secondary_citing_tasks = []
-        for i in range(limit_for_secondary):
-            if i < len(cited_papers):
-                secondary_citing_tasks.append(get_citing_papers(cited_papers[i], limit=10))
+        logger.info(f"Found {len(cited_papers)} cited and {len(citing_papers)} citing papers for PMID: {pmid}")
         
-        secondary_citing_results = await asyncio.gather(*secondary_citing_tasks)
+        # Gather all unique PMIDs
+        all_pmids = set([pmid])  # Start with the source PMID
+        all_pmids.update([str(p) for p in citing_papers])
+        all_pmids.update([str(p) for p in cited_papers])
         
-        # Process secondary citing papers
-        for cited_idx, citing_list in enumerate(secondary_citing_results):
-            if cited_idx < len(cited_papers):
-                cited_pmid = cited_papers[cited_idx]
-                for citing_pmid in citing_list:
-                    # Don't include the original paper as a secondary connection
-                    if str(citing_pmid) != pmid:
-                        secondary_connections.append({
-                            'source': str(citing_pmid),
-                            'target': str(cited_pmid),
-                            'type': 'cites'
-                        })
-                        secondary_papers.add(str(citing_pmid))
-    
-    # Add secondary papers to all_pmids
-    all_pmids.update(secondary_papers)
-    
-    # Fetch metadata for all PMIDs
-    metadata = await get_publication_metadata(list(all_pmids))
-    
-    # Build nodes and edges for the network
-    nodes = []
-    edges = []
-    
-    # Add the source node
-    source_metadata = metadata.get(pmid, {
-        'title': f"Paper {pmid}",
-        'authors': 'Unknown Authors',
-        'year': '',
-        'journal': 'Unknown Journal'
-    })
-    
-    nodes.append({
-        'id': pmid,
-        'label': source_metadata.get('title', f"Paper {pmid}"),
-        'authors': source_metadata.get('authors', 'Unknown Authors'),
-        'year': source_metadata.get('year', ''),
-        'journal': source_metadata.get('journal', 'Unknown Journal'),
-        'type': 'source'
-    })
-    
-    # Add citing paper nodes and edges
-    for citing_pmid in citing_papers:
-        citing_pmid = str(citing_pmid)
-        citing_metadata = metadata.get(citing_pmid, {
-            'title': f"Paper {citing_pmid}",
-            'authors': 'Unknown Authors',
-            'year': '',
-            'journal': 'Unknown Journal'
-        })
+        # Find secondary connections (citations between citing and cited papers)
+        secondary_connections = []
+        secondary_papers = set()
         
-        nodes.append({
-            'id': citing_pmid,
-            'label': citing_metadata.get('title', f"Paper {citing_pmid}"),
-            'authors': citing_metadata.get('authors', 'Unknown Authors'),
-            'year': citing_metadata.get('year', ''),
-            'journal': citing_metadata.get('journal', 'Unknown Journal'),
-            'type': 'citing'
-        })
+        # For up to 3 citing papers, find who they cite (besides the source)
+        limit_for_secondary = min(3, len(citing_papers))
+        if limit_for_secondary > 0:
+            try:
+                # Get papers cited by the first few citing papers
+                secondary_cited_tasks = []
+                for i in range(limit_for_secondary):
+                    if i < len(citing_papers):
+                        secondary_cited_tasks.append(get_cited_papers(citing_papers[i], limit=10))
+                
+                secondary_cited_results = await asyncio.gather(*secondary_cited_tasks)
+                
+                # Process secondary cited papers
+                for citing_idx, cited_list in enumerate(secondary_cited_results):
+                    if citing_idx < len(citing_papers):
+                        citing_pmid = citing_papers[citing_idx]
+                        for cited_pmid in cited_list:
+                            # Don't include the original paper as a secondary connection
+                            if str(cited_pmid) != pmid:
+                                secondary_connections.append({
+                                    'source': str(citing_pmid),
+                                    'target': str(cited_pmid),
+                                    'type': 'cites'
+                                })
+                                secondary_papers.add(str(cited_pmid))
+            except Exception as e:
+                logger.warning(f"Error getting secondary cited connections: {str(e)}")
+                # Continue without secondary connections
         
-        edges.append({
-            'source': citing_pmid,
-            'target': pmid,
-            'type': 'cites'
-        })
-    
-    # Add cited paper nodes and edges
-    for cited_pmid in cited_papers:
-        cited_pmid = str(cited_pmid)
-        cited_metadata = metadata.get(cited_pmid, {
-            'title': f"Paper {cited_pmid}",
-            'authors': 'Unknown Authors',
-            'year': '',
-            'journal': 'Unknown Journal'
-        })
+        # Add secondary papers to all_pmids
+        all_pmids.update(secondary_papers)
         
-        nodes.append({
-            'id': cited_pmid,
-            'label': cited_metadata.get('title', f"Paper {cited_pmid}"),
-            'authors': cited_metadata.get('authors', 'Unknown Authors'),
-            'year': cited_metadata.get('year', ''),
-            'journal': cited_metadata.get('journal', 'Unknown Journal'),
-            'type': 'cited'
-        })
+        # For up to 3 cited papers, find who cites them (besides the source)
+        limit_for_secondary = min(3, len(cited_papers))
+        if limit_for_secondary > 0:
+            try:
+                # Get papers that cite the first few cited papers
+                secondary_citing_tasks = []
+                for i in range(limit_for_secondary):
+                    if i < len(cited_papers):
+                        secondary_citing_tasks.append(get_citing_papers(cited_papers[i], limit=10))
+                
+                secondary_citing_results = await asyncio.gather(*secondary_citing_tasks)
+                
+                # Process secondary citing papers
+                for cited_idx, citing_list in enumerate(secondary_citing_results):
+                    if cited_idx < len(cited_papers):
+                        cited_pmid = cited_papers[cited_idx]
+                        for citing_pmid in citing_list:
+                            # Don't include the original paper as a secondary connection
+                            if str(citing_pmid) != pmid:
+                                secondary_connections.append({
+                                    'source': str(citing_pmid),
+                                    'target': str(cited_pmid),
+                                    'type': 'cites'
+                                })
+                                secondary_papers.add(str(citing_pmid))
+            except Exception as e:
+                logger.warning(f"Error getting secondary citing connections: {str(e)}")
+                # Continue without secondary connections
         
-        edges.append({
-            'source': pmid,
-            'target': cited_pmid,
-            'type': 'cites'
-        })
-    
-    # Add secondary papers (if not already in the network)
-    existing_node_ids = set(node['id'] for node in nodes)
-    for pmid_sec in secondary_papers:
-        pmid_sec = str(pmid_sec)
-        if pmid_sec not in existing_node_ids:
-            sec_metadata = metadata.get(pmid_sec, {
-                'title': f"Paper {pmid_sec}",
+        # Add secondary papers to all_pmids
+        all_pmids.update(secondary_papers)
+        
+        # Fetch metadata for all PMIDs
+        try:
+            metadata = await get_publication_metadata(list(all_pmids))
+        except Exception as e:
+            logger.error(f"Error fetching publication metadata: {str(e)}")
+            # Create fallback metadata if needed
+            metadata = {pmid: {
+                'title': f"Paper {pmid}",
+                'authors': 'Unknown Authors',
+                'year': '',
+                'journal': 'Unknown Journal'
+            }}
+        
+        # Build nodes and edges for the network
+        nodes = []
+        edges = []
+        
+        # Add the source node
+        try:
+            source_metadata = metadata.get(pmid, {
+                'title': f"Paper {pmid}",
                 'authors': 'Unknown Authors',
                 'year': '',
                 'journal': 'Unknown Journal'
             })
             
             nodes.append({
-                'id': pmid_sec,
-                'label': sec_metadata.get('title', f"Paper {pmid_sec}"),
-                'authors': sec_metadata.get('authors', 'Unknown Authors'),
-                'year': sec_metadata.get('year', ''),
-                'journal': sec_metadata.get('journal', 'Unknown Journal'),
+                'id': pmid,
+                'label': source_metadata.get('title', f"Paper {pmid}"),
+                'authors': source_metadata.get('authors', 'Unknown Authors'),
+                'year': source_metadata.get('year', ''),
+                'journal': source_metadata.get('journal', 'Unknown Journal'),
+                'type': 'source'
+            })
+        except Exception as e:
+            logger.error(f"Error adding source node: {str(e)}")
+            # Add a minimal source node
+            nodes.append({
+                'id': pmid,
+                'label': f"Paper {pmid}",
+                'authors': 'Unknown Authors',
+                'year': '',
+                'journal': 'Unknown Journal',
+                'type': 'source'
+            })
+            source_metadata = {
+                'title': f"Paper {pmid}",
+                'authors': 'Unknown Authors',
+                'year': '',
+                'journal': 'Unknown Journal'
+            }
+        
+        # Add citing paper nodes and edges
+        for citing_pmid in citing_papers:
+            citing_pmid = str(citing_pmid)
+            citing_metadata = metadata.get(citing_pmid, {
+                'title': f"Paper {citing_pmid}",
+                'authors': 'Unknown Authors',
+                'year': '',
+                'journal': 'Unknown Journal'
+            })
+            
+            nodes.append({
+                'id': citing_pmid,
+                'label': citing_metadata.get('title', f"Paper {citing_pmid}"),
+                'authors': citing_metadata.get('authors', 'Unknown Authors'),
+                'year': citing_metadata.get('year', ''),
+                'journal': citing_metadata.get('journal', 'Unknown Journal'),
+                'type': 'citing'
+            })
+            
+            edges.append({
+                'source': citing_pmid,
+                'target': pmid,
+                'type': 'cites'
+            })
+        
+        # Add cited paper nodes and edges
+        for cited_pmid in cited_papers:
+            cited_pmid = str(cited_pmid)
+            cited_metadata = metadata.get(cited_pmid, {
+                'title': f"Paper {cited_pmid}",
+                'authors': 'Unknown Authors',
+                'year': '',
+                'journal': 'Unknown Journal'
+            })
+            
+            nodes.append({
+                'id': cited_pmid,
+                'label': cited_metadata.get('title', f"Paper {cited_pmid}"),
+                'authors': cited_metadata.get('authors', 'Unknown Authors'),
+                'year': cited_metadata.get('year', ''),
+                'journal': cited_metadata.get('journal', 'Unknown Journal'),
+                'type': 'cited'
+            })
+            
+            edges.append({
+                'source': pmid,
+                'target': cited_pmid,
+                'type': 'cites'
+            })
+        
+        # Add secondary papers (if not already in the network)
+        existing_node_ids = set(node['id'] for node in nodes)
+        for pmid_sec in secondary_papers:
+            pmid_sec = str(pmid_sec)
+            if pmid_sec not in existing_node_ids:
+                sec_metadata = metadata.get(pmid_sec, {
+                    'title': f"Paper {pmid_sec}",
+                    'authors': 'Unknown Authors',
+                    'year': '',
+                    'journal': 'Unknown Journal'
+                })
+                
+                nodes.append({
+                    'id': pmid_sec,
+                    'label': sec_metadata.get('title', f"Paper {pmid_sec}"),
+                    'authors': sec_metadata.get('authors', 'Unknown Authors'),
+                    'year': sec_metadata.get('year', ''),
+                    'journal': sec_metadata.get('journal', 'Unknown Journal'),
+                    'type': 'secondary'
+                })
+                existing_node_ids.add(pmid_sec)
+        
+        # Add secondary connection edges
+        for conn in secondary_connections:
+            edges.append({
+                'source': conn['source'],
+                'target': conn['target'],
                 'type': 'secondary'
             })
-            existing_node_ids.add(pmid_sec)
-    
-    # Add secondary connection edges
-    for conn in secondary_connections:
-        edges.append({
-            'source': conn['source'],
-            'target': conn['target'],
-            'type': 'secondary'
-        })
-    
-    # Add co-citation relationships
-    cocitation_edges = []
-    
-    # For each pair of cited papers, add a co-citation edge
-    cited_list = list(cited_papers)
-    for i in range(len(cited_list)):
-        for j in range(i + 1, len(cited_list)):
-            source_id = str(cited_list[i])
-            target_id = str(cited_list[j])
-            
-            cocitation_edges.append({
-                'source': source_id,
-                'target': target_id,
-                'type': 'cocitation',
-                'weight': 1  # Could be weighted by number of shared citations
-            })
-    
-    # Add co-citation edges to the main edges list
-    edges.extend(cocitation_edges)
-    
-    # Prepare metadata for the response
-    network_metadata = {
-        'source_title': source_metadata.get('title', f"Paper {pmid}"),
-        'citing_count': len(citing_papers),
-        'cited_count': len(cited_papers),
-        'secondary_count': len(secondary_papers),
-        'total_nodes': len(nodes),
-        'total_edges': len(edges),
-        'cocitation_edges': len(cocitation_edges)
-    }
-    
-    logger.info(f"Built network with {len(nodes)} nodes and {len(edges)} edges")
-    
-    return {
-        'source_pmid': pmid,
-        'nodes': nodes,
-        'edges': edges,
-        'metadata': network_metadata
-    }
+        
+        # Add co-citation relationships
+        cocitation_edges = []
+        
+        # For each pair of cited papers, add a co-citation edge
+        cited_list = list(cited_papers)
+        for i in range(len(cited_list)):
+            for j in range(i + 1, len(cited_list)):
+                source_id = str(cited_list[i])
+                target_id = str(cited_list[j])
+                
+                cocitation_edges.append({
+                    'source': source_id,
+                    'target': target_id,
+                    'type': 'cocitation',
+                    'weight': 1  # Could be weighted by number of shared citations
+                })
+        
+        # Add co-citation edges to the main edges list
+        edges.extend(cocitation_edges)
+        
+        # Prepare metadata for the response
+        network_metadata = {
+            'source_title': source_metadata.get('title', f"Paper {pmid}"),
+            'citing_count': len(citing_papers),
+            'cited_count': len(cited_papers),
+            'secondary_count': len(secondary_papers),
+            'total_nodes': len(nodes),
+            'total_edges': len(edges),
+            'cocitation_edges': len(cocitation_edges)
+        }
+        
+        logger.info(f"Built network with {len(nodes)} nodes and {len(edges)} edges")
+        
+        return {
+            'source_pmid': pmid,
+            'nodes': nodes,
+            'edges': edges,
+            'metadata': network_metadata
+        }
+    except Exception as e:
+        logger.error(f"Error building co-citation network: {str(e)}")
+        return {
+            'source_pmid': pmid,
+            'nodes': [],
+            'edges': [],
+            'metadata': {
+                'error': str(e)
+            }
+        }
 
 @app.errorhandler(404)
 def page_not_found(e):

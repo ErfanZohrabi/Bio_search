@@ -1,7 +1,17 @@
-   services:
-     - type: web
-       name: biosearch
-       env: python
-       buildCommand: pip install -r requirements.txt
-       startCommand: gunicorn app:app
-       plan: free
+services:
+  - type: web
+    name: biosearch
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn wsgi:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: USE_AIOREDIS
+        value: false
+      - key: FLASK_ENV
+        value: production
+      - key: CACHE_ENABLED
+        value: true
+      - key: CACHE_TTL
+        value: 3600 
