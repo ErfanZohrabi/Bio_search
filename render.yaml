@@ -4,14 +4,19 @@ services:
     env: python
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn wsgi:app
+    plan: free
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11.0
-      - key: USE_AIOREDIS
-        value: false
+        value: 3.9
+      - key: FLASK_APP
+        value: app.py
       - key: FLASK_ENV
         value: production
-      - key: CACHE_ENABLED
-        value: true
-      - key: CACHE_TTL
-        value: 3600 
+      - key: PYTHONUNBUFFERED
+        value: "true"
+    healthCheckPath: /
+    autoDeploy: true
+    disk:
+      name: biosearch-data
+      mountPath: /data
+      sizeGB: 1 

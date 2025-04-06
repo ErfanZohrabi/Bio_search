@@ -202,6 +202,60 @@ optional arguments:
   --server URL          Use running BioSearch server at URL instead of direct API calls
 ```
 
+## Deployment
+
+BioSearch can be easily deployed to cloud platforms. The repository includes configuration for automatic deployment.
+
+### Deploying to Render.com
+
+The project includes a `render.yaml` file that configures the deployment for [Render.com](https://render.com/):
+
+1. Create an account on Render.com if you haven't already
+2. Fork this repository to your GitHub account
+3. In Render.com, click "New" and select "Blueprint" from the dropdown menu
+4. Connect your GitHub account and select the forked repository
+5. Render will automatically detect the `render.yaml` file and set up the application
+6. Set the following environment variables in the Render dashboard:
+   - `FLASK_ENV`: production
+   - `NCBI_API_KEY`: Your NCBI API key (optional, but recommended)
+   - Any other API keys or configuration variables
+
+### Automatic Deployment with GitHub Actions
+
+The repository includes GitHub Actions workflows that automate deployment:
+
+1. **Deploy to Render**: When you push to the main branch, the application is automatically deployed to Render.com.
+   - Setup required: Add the following secrets to your GitHub repository settings:
+     - `RENDER_SERVICE_ID`: Your Render service ID (found in the Render dashboard)
+     - `RENDER_API_KEY`: Your Render API key (generated in your Render account settings)
+
+2. **Deploy Documentation**: The project documentation is automatically published to GitHub Pages.
+   - This creates a static website from your README.md and any documentation in the `/docs` folder
+   - The documentation site will be available at `https://[your-username].github.io/biosearch/`
+
+### Deploying Manually
+
+If you prefer to deploy manually or to a different platform:
+
+```bash
+# Build and run with gunicorn (production server)
+pip install gunicorn
+gunicorn wsgi:app
+
+# Or with specific host and port
+gunicorn --bind 0.0.0.0:8000 wsgi:app
+```
+
+### Troubleshooting Deployment
+
+If you encounter issues during deployment:
+
+1. **Database API Errors**: Ensure all required API keys are set in environment variables
+2. **Connection Timeouts**: Some public APIs have rate limits; consider implementing more aggressive caching
+3. **Memory Issues**: Adjust the resource allocation in your hosting platform if needed
+
+Remember that the web application requires a Python runtime environment and cannot be deployed to static hosting services like GitHub Pages directly.
+
 ## API Usage
 
 BioSearch provides a RESTful API for programmatic access:

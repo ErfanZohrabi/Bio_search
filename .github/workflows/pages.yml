@@ -1,0 +1,53 @@
+name: Deploy docs to GitHub Pages
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'docs/**'
+      - 'README.md'
+
+jobs:
+  deploy-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install mkdocs mkdocs-material
+          
+      - name: Setup docs directory
+        run: |
+          mkdir -p docs
+          cp README.md docs/index.md || echo "README.md not found, creating placeholder"
+          if [ ! -f docs/index.md ]; then
+            echo "# BioSearch Documentation" > docs/index.md
+            echo "Documentation for the BioSearch platform" >> docs/index.md
+          fi
+          
+      - name: Create mkdocs config
+        run: |
+          cat > mkdocs.yml << EOF
+          site_name: BioSearch
+          theme:
+            name: material
+            palette:
+              primary: indigo
+              accent: indigo
+          EOF
+          
+      - name: Build site
+        run: mkdocs build
+        
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site 
