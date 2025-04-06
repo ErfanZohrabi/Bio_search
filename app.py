@@ -119,11 +119,27 @@ async def robust_fetch(session, url, params=None, timeout=60.0):
                 
     except asyncio.TimeoutError:
         logger.error(f"Timeout error fetching {url}")
-        raise  # Re-raise to be caught by retry or caller
+        # Return a special error object instead of raising the exception
+        return {
+            "error": "Request timed out. The server is taking too long to respond.",
+            "timeout_error": True
+        }
+        
+    except aiohttp.ClientConnectorError as e:
+        logger.error(f"Connection error fetching {url}: {e}")
+        # Return a special error object for connection issues
+        return {
+            "error": f"Connection error: {str(e)}",
+            "connection_error": True
+        }
         
     except aiohttp.ClientError as e:
         logger.error(f"Client error fetching {url}: {e}")
-        raise  # Re-raise to be caught by retry
+        # Return a special error object for other client errors
+        return {
+            "error": f"Client error: {str(e)}",
+            "client_error": True
+        }
 
 # Define search_pubmed as a wrapper around search_ncbi
 async def search_pubmed(session, query, retmax=10, ssl_context=None):
@@ -576,6 +592,16 @@ async def string_network_data():
             logger.info(f"STRING API request parameters: {params}")    
             data = await robust_fetch(session, string_api_url, params)
             
+            # Check for special error objects
+            if isinstance(data, dict) and (
+                data.get("timeout_error") or 
+                data.get("connection_error") or 
+                data.get("client_error")
+            ):
+                error_msg = data.get("error", "Unknown error occurred")
+                logger.error(f"Error fetching STRING data: {error_msg}")
+                return jsonify({"error": error_msg}), 503  # Service Unavailable
+            
             # Ensure data is properly parsed as JSON if it's a string
             if isinstance(data, str):
                 try:
@@ -697,21 +723,45 @@ async def stitch_network_data():
     logger.info(f"STITCH network data requested for {len(identifier_list)} identifiers")
     
     try:
+        # Clean and validate identifiers
+        cleaned_identifiers = []
+        for identifier in identifier_list:
+            # Remove any whitespace and special characters except for dots and dashes
+            cleaned = identifier.strip()
+            if cleaned:
+                cleaned_identifiers.append(cleaned)
+        
+        if not cleaned_identifiers:
+            return jsonify({"error": "No valid identifiers provided after cleaning"}), 400
+            
+        logger.info(f"Cleaned identifiers for STITCH: {cleaned_identifiers}")
+        
         # Use the enhanced HTTP client to fetch data from STITCH API
         connector = aiohttp.TCPConnector(ssl=ssl_context)
         async with aiohttp.ClientSession(connector=connector) as session:
             # Fetch network data from STITCH API
             stitch_api_url = "https://stitch.embl.de/api/json/network"
             params = {
-                "identifiers": "\r".join(identifier_list),
+                "identifiers": "%0d".join(cleaned_identifiers),  # STITCH API requires %0d separator
                 "species": species,
                 "required_score": score
             }
             
             if network_type:
                 params["network_type"] = network_type
-                
+             
+            logger.info(f"STITCH API request parameters: {params}")   
             data = await robust_fetch(session, stitch_api_url, params)
+            
+            # Check for special error objects
+            if isinstance(data, dict) and (
+                data.get("timeout_error") or 
+                data.get("connection_error") or 
+                data.get("client_error")
+            ):
+                error_msg = data.get("error", "Unknown error occurred")
+                logger.error(f"Error fetching STITCH data: {error_msg}")
+                return jsonify({"error": error_msg}), 503  # Service Unavailable
             
             # Ensure data is properly parsed as JSON if it's a string
             if isinstance(data, str):
@@ -723,6 +773,12 @@ async def stitch_network_data():
             
             # Handle case where data is not a list
             if not isinstance(data, list):
+                # Check if it's an error message from STITCH API
+                if isinstance(data, dict) and "error" in data:
+                    error_msg = data.get("error", "Unknown STITCH API error")
+                    logger.error(f"STITCH API returned error: {error_msg}")
+                    return jsonify({"error": f"STITCH API error: {error_msg}"}), 400
+                
                 logger.error(f"Expected list from STITCH API, got {type(data)}: {str(data)[:100]}...")
                 return jsonify({"error": "Unexpected response format from STITCH API"}), 500
             
@@ -780,6 +836,11 @@ async def stitch_network_data():
                     }
                 })
             
+            # If we have no nodes/edges but didn't get an error from STITCH
+            if not nodes:
+                logger.warning(f"STITCH API returned no nodes for identifiers: {cleaned_identifiers}")
+                return jsonify({"error": "No protein-drug interactions found. Try using official UniProt or chemical identifiers."}), 404
+            
             return jsonify({
                 "elements": {
                     "nodes": nodes,
@@ -788,14 +849,14 @@ async def stitch_network_data():
                 "metadata": {
                     "total_nodes": len(nodes),
                     "total_edges": len(edges),
-                    "source_identifiers": identifier_list,
+                    "source_identifiers": cleaned_identifiers,
                     "species": species,
                     "score": score
                 }
             })
     
     except Exception as e:
-        logger.error(f"Error fetching STITCH network data: {str(e)}")
+        logger.error(f"Error fetching STITCH network data: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 @app.route('/publication-network')
@@ -830,6 +891,12 @@ async def publication_cocitation_network():
         if query and not pmid:
             logger.info(f"Searching for PMIDs with query: {query}")
             pmids = await search_pubmed_pmids(query, limit=5)
+            
+            # Check for timeout or connection errors from the PMID search
+            if isinstance(pmids, dict) and "error" in pmids:
+                logger.warning(f"Error in PMID search: {pmids['error']}")
+                return jsonify({"error": pmids["error"]}), 503  # Service Unavailable
+                
             if not pmids:
                 logger.warning(f"No publications found for query: {query}")
                 return jsonify({"error": f"No publications found for query: {query}"}), 404
@@ -840,12 +907,22 @@ async def publication_cocitation_network():
         try:
             # Set a higher timeout for network building operations
             network_data = await build_cocitation_network(pmid, limit)
+            
+            # Check for errors in network data
+            if (network_data.get('metadata') and 
+                network_data['metadata'].get('error') and
+                len(network_data.get('nodes', [])) <= 1):
+                    
+                logger.warning(f"Network generation returned error: {network_data['metadata']['error']}")
+                # Don't return 500, return 200 with minimal data and error in metadata
+                # The client can handle displaying the error
+            
             logger.info(f"Built co-citation network with {len(network_data.get('nodes', []))} nodes and {len(network_data.get('edges', []))} edges")
             
-            # Ensure we have valid data structure
-            if not network_data.get('nodes') or not network_data.get('edges'):
-                logger.warning(f"Network data missing nodes or edges for PMID: {pmid}")
-                return jsonify({"error": "Could not generate network data - insufficient citation information"}), 404
+            # Ensure we have valid data structure (at least the source node)
+            if not network_data.get('nodes'):
+                logger.warning(f"Network data missing nodes for PMID: {pmid}")
+                return jsonify({"error": "Could not generate network data - no publication information found"}), 404
                 
             # Validate the network data using the Pydantic model
             try:
@@ -1101,34 +1178,84 @@ async def build_cocitation_network(pmid, limit=30):
     logger.info(f"Building co-citation network for PMID: {pmid}")
     
     try:
-        # Fetch citing and cited papers concurrently
-        citing_papers_task = get_citing_papers(pmid, limit=limit)
-        cited_papers_task = get_cited_papers(pmid, limit=limit)
+        # Define empty fallback values for all data
+        citing_papers = []
+        cited_papers = []
+        all_pmids = set([pmid])  # Start with just the source PMID
+        secondary_connections = []
+        secondary_papers = set()
+
+        # Use a longer timeout and wrap in try/except
+        try:
+            # Fetch citing and cited papers concurrently with a timeout
+            citing_papers_task = asyncio.create_task(get_citing_papers(pmid, limit=limit))
+            cited_papers_task = asyncio.create_task(get_cited_papers(pmid, limit=limit))
+            
+            # Wait for both tasks with a timeout
+            done, pending = await asyncio.wait(
+                [citing_papers_task, cited_papers_task], 
+                timeout=30.0,  # 30 second timeout
+                return_when=asyncio.ALL_COMPLETED
+            )
+            
+            # Cancel any pending tasks
+            for task in pending:
+                task.cancel()
+                
+            # Process completed tasks
+            if citing_papers_task in done and not citing_papers_task.exception():
+                citing_papers = citing_papers_task.result()
+            else:
+                logger.warning(f"Failed to get citing papers for PMID {pmid}")
+                
+            if cited_papers_task in done and not cited_papers_task.exception():
+                cited_papers = cited_papers_task.result()
+            else:
+                logger.warning(f"Failed to get cited papers for PMID {pmid}")
+                
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout while fetching citation data for PMID: {pmid}")
+        except Exception as e:
+            logger.warning(f"Error fetching citation data: {str(e)}")
         
-        citing_papers, cited_papers = await asyncio.gather(citing_papers_task, cited_papers_task)
-        
+        # Continue with whatever data we have even if some parts failed
         logger.info(f"Found {len(cited_papers)} cited and {len(citing_papers)} citing papers for PMID: {pmid}")
         
-        # Gather all unique PMIDs
-        all_pmids = set([pmid])  # Start with the source PMID
+        # Update all_pmids with the papers we found
         all_pmids.update([str(p) for p in citing_papers])
         all_pmids.update([str(p) for p in cited_papers])
         
         # Find secondary connections (citations between citing and cited papers)
-        secondary_connections = []
-        secondary_papers = set()
-        
-        # For up to 3 citing papers, find who they cite (besides the source)
+        # Only proceed if we have some citing papers
         limit_for_secondary = min(3, len(citing_papers))
         if limit_for_secondary > 0:
             try:
-                # Get papers cited by the first few citing papers
+                # Use a timeout for secondary connection fetching
                 secondary_cited_tasks = []
                 for i in range(limit_for_secondary):
                     if i < len(citing_papers):
-                        secondary_cited_tasks.append(get_cited_papers(citing_papers[i], limit=10))
+                        secondary_cited_tasks.append(asyncio.create_task(
+                            get_cited_papers(citing_papers[i], limit=10)
+                        ))
                 
-                secondary_cited_results = await asyncio.gather(*secondary_cited_tasks)
+                # Wait for tasks with timeout
+                done, pending = await asyncio.wait(
+                    secondary_cited_tasks,
+                    timeout=20.0,  # 20 second timeout
+                    return_when=asyncio.ALL_COMPLETED
+                )
+                
+                # Cancel pending tasks
+                for task in pending:
+                    task.cancel()
+                
+                # Process completed tasks
+                secondary_cited_results = []
+                for i, task in enumerate(secondary_cited_tasks):
+                    if task in done and not task.exception():
+                        secondary_cited_results.append(task.result())
+                    else:
+                        secondary_cited_results.append([])  # Empty result for failed tasks
                 
                 # Process secondary cited papers
                 for citing_idx, cited_list in enumerate(secondary_cited_results):
@@ -1150,44 +1277,15 @@ async def build_cocitation_network(pmid, limit=30):
         # Add secondary papers to all_pmids
         all_pmids.update(secondary_papers)
         
-        # For up to 3 cited papers, find who cites them (besides the source)
-        limit_for_secondary = min(3, len(cited_papers))
-        if limit_for_secondary > 0:
-            try:
-                # Get papers that cite the first few cited papers
-                secondary_citing_tasks = []
-                for i in range(limit_for_secondary):
-                    if i < len(cited_papers):
-                        secondary_citing_tasks.append(get_citing_papers(cited_papers[i], limit=10))
-                
-                secondary_citing_results = await asyncio.gather(*secondary_citing_tasks)
-                
-                # Process secondary citing papers
-                for cited_idx, citing_list in enumerate(secondary_citing_results):
-                    if cited_idx < len(cited_papers):
-                        cited_pmid = cited_papers[cited_idx]
-                        for citing_pmid in citing_list:
-                            # Don't include the original paper as a secondary connection
-                            if str(citing_pmid) != pmid:
-                                secondary_connections.append({
-                                    'source': str(citing_pmid),
-                                    'target': str(cited_pmid),
-                                    'type': 'cites'
-                                })
-                                secondary_papers.add(str(citing_pmid))
-            except Exception as e:
-                logger.warning(f"Error getting secondary citing connections: {str(e)}")
-                # Continue without secondary connections
-        
-        # Add secondary papers to all_pmids
-        all_pmids.update(secondary_papers)
-        
+        # Process remaining parts of the function with better error handling
         # Fetch metadata for all PMIDs
+        metadata = {}
         try:
-            metadata = await get_publication_metadata(list(all_pmids))
+            if all_pmids:
+                metadata = await get_publication_metadata(list(all_pmids))
         except Exception as e:
             logger.error(f"Error fetching publication metadata: {str(e)}")
-            # Create fallback metadata if needed
+            # Create fallback metadata
             metadata = {pmid: {
                 'title': f"Paper {pmid}",
                 'authors': 'Unknown Authors',
@@ -1199,40 +1297,23 @@ async def build_cocitation_network(pmid, limit=30):
         nodes = []
         edges = []
         
+        # Ensure we have at least the source node
+        source_metadata = metadata.get(pmid, {
+            'title': f"Paper {pmid}",
+            'authors': 'Unknown Authors',
+            'year': '',
+            'journal': 'Unknown Journal'
+        })
+        
         # Add the source node
-        try:
-            source_metadata = metadata.get(pmid, {
-                'title': f"Paper {pmid}",
-                'authors': 'Unknown Authors',
-                'year': '',
-                'journal': 'Unknown Journal'
-            })
-            
-            nodes.append({
-                'id': pmid,
-                'label': source_metadata.get('title', f"Paper {pmid}"),
-                'authors': source_metadata.get('authors', 'Unknown Authors'),
-                'year': source_metadata.get('year', ''),
-                'journal': source_metadata.get('journal', 'Unknown Journal'),
-                'type': 'source'
-            })
-        except Exception as e:
-            logger.error(f"Error adding source node: {str(e)}")
-            # Add a minimal source node
-            nodes.append({
-                'id': pmid,
-                'label': f"Paper {pmid}",
-                'authors': 'Unknown Authors',
-                'year': '',
-                'journal': 'Unknown Journal',
-                'type': 'source'
-            })
-            source_metadata = {
-                'title': f"Paper {pmid}",
-                'authors': 'Unknown Authors',
-                'year': '',
-                'journal': 'Unknown Journal'
-            }
+        nodes.append({
+            'id': pmid,
+            'label': source_metadata.get('title', f"Paper {pmid}"),
+            'authors': source_metadata.get('authors', 'Unknown Authors'),
+            'year': source_metadata.get('year', ''),
+            'journal': source_metadata.get('journal', 'Unknown Journal'),
+            'type': 'source'
+        })
         
         # Add citing paper nodes and edges
         for citing_pmid in citing_papers:
@@ -1284,7 +1365,7 @@ async def build_cocitation_network(pmid, limit=30):
                 'type': 'cites'
             })
         
-        # Add secondary papers (if not already in the network)
+        # Add secondary connection edges and nodes
         existing_node_ids = set(node['id'] for node in nodes)
         for pmid_sec in secondary_papers:
             pmid_sec = str(pmid_sec)
@@ -1306,30 +1387,26 @@ async def build_cocitation_network(pmid, limit=30):
                 })
                 existing_node_ids.add(pmid_sec)
         
-        # Add secondary connection edges
         for conn in secondary_connections:
-            edges.append({
-                'source': conn['source'],
-                'target': conn['target'],
-                'type': 'secondary'
-            })
+            edges.append(conn)
         
         # Add co-citation relationships
         cocitation_edges = []
         
-        # For each pair of cited papers, add a co-citation edge
+        # For each pair of cited papers, add a co-citation edge if we have at least 2 cited papers
         cited_list = list(cited_papers)
-        for i in range(len(cited_list)):
-            for j in range(i + 1, len(cited_list)):
-                source_id = str(cited_list[i])
-                target_id = str(cited_list[j])
-                
-                cocitation_edges.append({
-                    'source': source_id,
-                    'target': target_id,
-                    'type': 'cocitation',
-                    'weight': 1  # Could be weighted by number of shared citations
-                })
+        if len(cited_list) >= 2:
+            for i in range(len(cited_list)):
+                for j in range(i + 1, len(cited_list)):
+                    source_id = str(cited_list[i])
+                    target_id = str(cited_list[j])
+                    
+                    cocitation_edges.append({
+                        'source': source_id,
+                        'target': target_id,
+                        'type': 'cocitation',
+                        'weight': 1  # Could be weighted by number of shared citations
+                    })
         
         # Add co-citation edges to the main edges list
         edges.extend(cocitation_edges)
@@ -1347,6 +1424,7 @@ async def build_cocitation_network(pmid, limit=30):
         
         logger.info(f"Built network with {len(nodes)} nodes and {len(edges)} edges")
         
+        # Return with at least the source node, even if we couldn't find any connections
         return {
             'source_pmid': pmid,
             'nodes': nodes,
@@ -1354,13 +1432,28 @@ async def build_cocitation_network(pmid, limit=30):
             'metadata': network_metadata
         }
     except Exception as e:
-        logger.error(f"Error building co-citation network: {str(e)}")
+        logger.error(f"Error building co-citation network: {str(e)}", exc_info=True)
+        # Return a minimal valid network with just the source node to prevent 500 errors
         return {
             'source_pmid': pmid,
-            'nodes': [],
+            'nodes': [{
+                'id': pmid,
+                'label': f"Paper {pmid}",
+                'authors': 'Unknown Authors',
+                'year': '',
+                'journal': 'Unknown Journal',
+                'type': 'source'
+            }],
             'edges': [],
             'metadata': {
-                'error': str(e)
+                'error': str(e),
+                'source_title': f"Paper {pmid}",
+                'citing_count': 0,
+                'cited_count': 0,
+                'secondary_count': 0,
+                'total_nodes': 1,
+                'total_edges': 0,
+                'cocitation_edges': 0
             }
         }
 
