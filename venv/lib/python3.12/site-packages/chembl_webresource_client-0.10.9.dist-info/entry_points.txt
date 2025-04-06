@@ -1,0 +1,7 @@
+[console_scripts]
+chembl_act = chembl_webresource_client.scripts.chembl_act:main
+chembl_ids = chembl_webresource_client.scripts.chembl_ids:main
+chembl_m2t = chembl_webresource_client.scripts.chembl_m2t:main
+chembl_sim = chembl_webresource_client.scripts.chembl_sim:main
+chembl_sub = chembl_webresource_client.scripts.chembl_sub:main
+chembl_t2m = chembl_webresource_client.scripts.chembl_t2m:main
