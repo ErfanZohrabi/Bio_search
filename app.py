@@ -441,89 +441,82 @@ def api_search():
         "results": {},
         "result_counts": {}
     }
-    
-    # Search each database
-    for db_name in databases:
-        if db_name in DATABASES:
-            db_info = DATABASES[db_name]
-            
-            try:
-                # Search the database
-                results = db_info['search_func'](query, ssl_context=ssl_context)
-                
-                # Format the results
-                formatted_results = db_info['format_func'](results, limit=limit)
-                
-                # Apply filters if needed
-                if organism and organism != 'all':
-                    formatted_results = [r for r in formatted_results if 'organism' not in r or r.get('organism', '').lower() == organism.lower()]
-                
-                if date_from or date_to:
-                    filtered_results = []
-                    for r in formatted_results:
-                        # Skip if no date field
-                        if 'date' not in r and 'year' not in r:
-                            continue
-                        
-                        # Extract date
-                        result_date = None
-                        if 'date' in r:
+
+    # Build filters dict for unified_search
+    filters = {}
+    if organism and organism != 'all':
+        filters['organism'] = organism
+    if date_from:
+        filters['date_from'] = date_from
+    if date_to:
+        filters['date_to'] = date_to
+
+    try:
+        unified_results = asyncio.run(unified_search(query, databases, filters, limit))
+    except Exception as e:
+        app.logger.error(f"Error in unified search: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+    # Map unified_search category names to API response type names
+    category_map = {
+        'genes': 'gene',
+        'proteins': 'protein',
+        'pathways': 'pathway',
+        'drugs': 'drug',
+        'publications': 'publication',
+        'structures': 'structure',
+    }
+
+    for src_key, dst_key in category_map.items():
+        items = unified_results.get('results', {}).get(src_key, [])
+        if items:
+            # Apply result_type filter if specified
+            if result_type:
+                items = [r for r in items if r.get('type', '') == result_type]
+            # Apply date filters if present (unified_search does not filter by date yet)
+            if date_from or date_to:
+                filtered = []
+                for r in items:
+                    result_date = None
+                    if 'date' in r:
+                        try:
+                            result_date = datetime.datetime.strptime(r['date'], '%Y-%m-%d')
+                        except ValueError:
+                            pass
+                    elif 'year' in r:
+                        try:
+                            result_date = datetime.datetime(int(r['year']), 1, 1)
+                        except (ValueError, TypeError):
+                            pass
+                    if result_date:
+                        if date_from:
                             try:
-                                result_date = datetime.datetime.strptime(r['date'], '%Y-%m-%d')
+                                from_date = datetime.datetime.strptime(date_from, '%Y-%m-%d')
+                                if result_date < from_date:
+                                    continue
                             except ValueError:
-                                continue
-                        elif 'year' in r:
+                                pass
+                        if date_to:
                             try:
-                                result_date = datetime.datetime(int(r['year']), 1, 1)
-                            except (ValueError, TypeError):
-                                continue
-                        
-                        if result_date:
-                            # Apply date_from filter
-                            if date_from:
-                                try:
-                                    from_date = datetime.datetime.strptime(date_from, '%Y-%m-%d')
-                                    if result_date < from_date:
-                                        continue
-                                except ValueError:
-                                    pass
-                            
-                            # Apply date_to filter
-                            if date_to:
-                                try:
-                                    to_date = datetime.datetime.strptime(date_to, '%Y-%m-%d')
-                                    if result_date > to_date:
-                                        continue
-                                except ValueError:
-                                    pass
-                        
-                        filtered_results.append(r)
-                    
-                    formatted_results = filtered_results
-                
-                if result_type:
-                    formatted_results = [r for r in formatted_results if 'type' in r and r['type'].lower() == result_type.lower()]
-                
-                # Group results by type
-                for result in formatted_results:
-                    result_type = result.get('type', 'unknown')
-                    if result_type not in search_results['results']:
-                        search_results['results'][result_type] = []
-                    
-                    # Add source database info
-                    result['source_db'] = db_info['name']
-                    result['badge_class'] = db_info['badge_class']
-                    
-                    search_results['results'][result_type].append(result)
-            
-            except Exception as e:
-                app.logger.error(f"Error searching {db_name}: {str(e)}")
-                # Continue with other databases even if one fails
-    
+                                to_date = datetime.datetime.strptime(date_to, '%Y-%m-%d')
+                                if result_date > to_date:
+                                    continue
+                            except ValueError:
+                                pass
+                    filtered.append(r)
+                items = filtered
+            if items:
+                search_results['results'][dst_key] = items
+
+    # Include any results from the 'other' category
+    for db_name, db_results in unified_results.get('results', {}).get('other', {}).items():
+        if db_results:
+            search_results['results'][db_name] = db_results
+
     # Calculate result counts
-    for result_type, results in search_results['results'].items():
-        search_results['result_counts'][result_type] = len(results)
-    
+    for rtype, rlist in search_results['results'].items():
+        search_results['result_counts'][rtype] = len(rlist)
+
     return jsonify(search_results)
 
 @app.route('/about')

@@ -85,8 +85,19 @@ async def search_engine(session, db_type, query, limit=10):
             return await format_uniprot_results(results)
         
         elif db_type == 'pathway':
-            # Currently we don't have a pathway database search
-            return []
+            from .kegg import search_kegg_pathway
+            raw_results = await search_kegg_pathway(session, query, limit=limit)
+            if isinstance(raw_results, dict) and 'error' in raw_results:
+                return {'error': raw_results['error']}
+            pathway_list = raw_results.get('results', []) if isinstance(raw_results, dict) else []
+            return [{
+                'id': p.get('id', ''),
+                'name': p.get('name', 'Unknown Pathway'),
+                'description': p.get('description', ''),
+                'url': p.get('url', ''),
+                'type': 'pathway',
+                'source_db': 'KEGG'
+            } for p in pathway_list[:limit]]
         
         elif db_type == 'structure':
             # Add a basic implementation for protein structure search in PDB
@@ -121,6 +132,23 @@ async def search_engine(session, db_type, query, limit=10):
             results = await search_pubmed(session, query, limit)
             return await format_pubmed_results(results)
         
+        elif db_type == 'ensembl':
+            from .ensembl import search_ensembl
+            raw_results = await search_ensembl(session, query)
+            if isinstance(raw_results, dict) and 'error' in raw_results:
+                return {'error': raw_results['error']}
+            gene_list = raw_results.get('results', []) if isinstance(raw_results, dict) else []
+            return [{
+                'id': g.get('id', ''),
+                'symbol': g.get('name', ''),
+                'name': g.get('description', g.get('name', 'Unknown')),
+                'description': g.get('description', ''),
+                'organism': g.get('species', 'Homo sapiens'),
+                'url': g.get('url', ''),
+                'type': 'gene',
+                'source_db': 'Ensembl'
+            } for g in gene_list[:limit]]
+
         else:
             logger.error(f"Unsupported database type: {db_type}")
             return {'error': f"Unsupported database type: {db_type}"}
@@ -160,7 +188,8 @@ async def unified_search(query, databases=None, filters=None, limit=10):
         'uniprot': 'protein',
         'drugbank': 'drug',
         'kegg': 'pathway',
-        'pdb': 'structure'
+        'pdb': 'structure',
+        'ensembl': 'ensembl'
     }
     
     if MOCK_MODE:
@@ -231,11 +260,13 @@ async def unified_search(query, databases=None, filters=None, limit=10):
                         item['source_db'] = 'KEGG'  # Force KEGG for pathways
                     elif db_type == 'structure':
                         item['source_db'] = 'PDB'  # Force PDB for structures
+                    elif db_type == 'ensembl':
+                        item['source_db'] = 'Ensembl'  # Force Ensembl for Ensembl genes
                     elif 'source_db' not in item:
                         item['source_db'] = db_id.upper()  # Default fallback
                 
                 # Add to the appropriate result category
-                if db_type == 'gene':
+                if db_type in ('gene', 'ensembl'):
                     results['results']['genes'].extend(db_results)
                     results['counts']['genes'] += len(db_results)
                 

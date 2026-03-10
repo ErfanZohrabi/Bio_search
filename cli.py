@@ -28,6 +28,8 @@ from api import (
     search_ncbi, search_pubmed, search_uniprot, search_drugbank,
     format_ncbi_gene_results, format_pubmed_results, format_uniprot_results, format_drugbank_results
 )
+from api.ensembl import search_ensembl, format_ensembl_results
+from api.kegg import search_kegg_pathway, format_kegg_results
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -45,11 +47,13 @@ ssl_context.verify_mode = ssl.CERT_NONE
 DATABASES = {
     'ncbi': {
         'name': 'NCBI',
+        'db_type': 'gene',
         'search_func': search_ncbi,
         'format_func': format_ncbi_gene_results
     },
     'pubmed': {
         'name': 'PubMed',
+        'db_type': 'pubmed',
         'search_func': search_pubmed,
         'format_func': format_pubmed_results
     },
@@ -62,6 +66,18 @@ DATABASES = {
         'name': 'DrugBank',
         'search_func': search_drugbank,
         'format_func': format_drugbank_results
+    },
+    'ensembl': {
+        'name': 'Ensembl',
+        'db_type': 'gene',
+        'search_func': search_ensembl,
+        'format_func': format_ensembl_results
+    },
+    'kegg': {
+        'name': 'KEGG',
+        'db_type': 'pathway',
+        'search_func': search_kegg_pathway,
+        'format_func': format_kegg_results
     }
 }
 
@@ -193,7 +209,8 @@ async def search_directly_async(args):
         "protein": [],
         "gene": [],
         "publication": [],
-        "drug": []
+        "drug": [],
+        "pathway": []
     }
     
     # Configure aiohttp session with SSL context
@@ -241,6 +258,12 @@ async def search_directly_async(args):
                         elif db_name == 'drugbank':
                             results["drug"].extend(formatted_results)
                             logger.info(f"Added {len(formatted_results)} results to drug category")
+                        elif db_name == 'ensembl':
+                            results["gene"].extend(formatted_results)
+                            logger.info(f"Added {len(formatted_results)} results to gene category (Ensembl)")
+                        elif db_name == 'kegg':
+                            results["pathway"].extend(formatted_results)
+                            logger.info(f"Added {len(formatted_results)} results to pathway category")
                     
                     except Exception as e:
                         console.print(f"[bold yellow]Warning:[/bold yellow] Error searching {db_name}: {str(e)}")
@@ -256,10 +279,10 @@ async def search_directly_async(args):
                         progress.update(overall_task, advance=1)
     
     # Calculate total count
-    total_count = sum(len(results[key]) for key in ['protein', 'gene', 'publication', 'drug'])
+    total_count = sum(len(results[key]) for key in ['protein', 'gene', 'publication', 'drug', 'pathway'])
     results['total_count'] = total_count
     
-    logger.info(f"Final result counts: genes={len(results['gene'])}, proteins={len(results['protein'])}, publications={len(results['publication'])}, drugs={len(results['drug'])}")
+    logger.info(f"Final result counts: genes={len(results['gene'])}, proteins={len(results['protein'])}, publications={len(results['publication'])}, drugs={len(results['drug'])}, pathways={len(results['pathway'])}")
     
     return results
 
@@ -286,7 +309,8 @@ def display_results(results, format_type, args):
             'protein': 'Protein',
             'gene': 'Gene',
             'publication': 'Publication',
-            'drug': 'Drug'
+            'drug': 'Drug',
+            'pathway': 'Pathway'
         }
         
         for key, title in result_types.items():
@@ -365,6 +389,20 @@ def display_results(results, format_type, args):
                         str(item.get('id', '')),
                         item.get('name', ''),
                         item.get('formula', ''),
+                        item.get('description', '')[:50] + ('...' if len(item.get('description', '')) > 50 else ''),
+                        item.get('source_db', '')
+                    )
+            
+            elif key == 'pathway':
+                table.add_column("ID")
+                table.add_column("Name")
+                table.add_column("Description")
+                table.add_column("Source")
+                
+                for item in items[:args.limit]:
+                    table.add_row(
+                        str(item.get('id', '')),
+                        item.get('name', '')[:50] + ('...' if len(item.get('name', '')) > 50 else ''),
                         item.get('description', '')[:50] + ('...' if len(item.get('description', '')) > 50 else ''),
                         item.get('source_db', '')
                     )
@@ -490,6 +528,24 @@ async def search_database(session, db_id, query, limit=10):
             raw_results = await search_drugbank(session, query, limit)
             formatted_results = await format_drugbank_results(raw_results)
             # Add source database info - ensure source is marked as DrugBank even though we use PubChem API
+            if formatted_results and isinstance(formatted_results, list):
+                for item in formatted_results:
+                    item['source_db'] = db_info['name']
+            return formatted_results
+        
+        elif db_id == 'ensembl':
+            raw_results = await search_ensembl(session, query)
+            gene_objects = await format_ensembl_results(raw_results)
+            formatted_results = [g.to_dict() for g in gene_objects]
+            if formatted_results and isinstance(formatted_results, list):
+                for item in formatted_results:
+                    item['source_db'] = db_info['name']
+            return formatted_results
+        
+        elif db_id == 'kegg':
+            raw_results = await search_kegg_pathway(session, query, limit=limit)
+            pathway_objects = await format_kegg_results(raw_results)
+            formatted_results = [p.to_dict() for p in pathway_objects]
             if formatted_results and isinstance(formatted_results, list):
                 for item in formatted_results:
                     item['source_db'] = db_info['name']
